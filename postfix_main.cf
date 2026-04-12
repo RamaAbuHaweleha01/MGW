@@ -1,0 +1,105 @@
+ #/etc/postfix/main.cf
+# See /usr/share/postfix/main.cf.dist for a commented, more complete version
+
+
+# Debian specific:  Specifying a file name will cause the first
+# line of that file to be used as the name.  The Debian default
+# is /etc/mailname.
+#myorigin = /etc/mailname
+
+smtpd_banner = $myhostname ESMTP $mail_name (Ubuntu)
+biff = no
+
+# appending .domain is the MUA's job.
+append_dot_mydomain = no
+
+# Uncomment the next line to generate "delayed mail" warnings
+#delay_warning_time = 4h
+
+readme_directory = no
+
+# See http://www.postfix.org/COMPATIBILITY_README.html -- default to 2 on
+# fresh installs.
+compatibility_level = 2
+
+alias_maps = hash:/etc/aliases
+alias_database = hash:/etc/aliases
+
+mailbox_size_limit = 0
+recipient_delimiter = +
+
+##############################################################################################################
+
+
+
+# ─── Identity ────────────────────────────────────────────────────────────────
+myhostname    = mgw.company.com
+mydomain      = company.com
+myorigin      = $mydomain
+
+smtpd_banner       = $myhostname ESMTP $mail_name (Ubuntu)
+biff               = no
+append_dot_mydomain = no
+readme_directory   = no
+compatibility_level = 2
+
+alias_maps         = hash:/etc/aliases
+alias_database     = hash:/etc/aliases
+recipient_delimiter = +
+
+# ─── Network ─────────────────────────────────────────────────────────────────
+inet_interfaces    = all
+inet_protocols     = ipv4
+
+# ─── Domains ─────────────────────────────────────────────────────────────────
+# MGW does NOT accept final delivery — it only relays
+mydestination      = localhost
+mynetworks         = 127.0.0.0/8, 192.168.200.0/24, 10.10.0.0/24
+relay_domains      = company.com
+
+# ─── Relay outbound mail to the internal mail server ─────────────────────────
+transport_maps     = hash:/etc/postfix/transport
+relayhost          =
+
+# ─── Mailbox — MGW does not do local delivery ────────────────────────────────
+mailbox_size_limit = 0
+message_size_limit = 52428800
+
+# ─── SASL Authentication (Dovecot SASL via TCP to mail server) ───────────────
+# MGW authenticates clients but delegates SASL to mail.company.com's Dovecot
+smtpd_sasl_type              = dovecot
+smtpd_sasl_path              = inet:10.10.0.20:12345
+smtpd_sasl_auth_enable       = yes
+smtpd_sasl_security_options  = noanonymous
+broken_sasl_auth_clients     = yes
+
+# ─── TLS ─────────────────────────────────────────────────────────────────────
+# TLS disabled for internal lab
+smtpd_tls_security_level = none
+smtp_tls_security_level  = none
+smtpd_tls_auth_only      = no
+
+
+#smtpd_tls_cert_file      = /etc/ssl/certs/mgw.company.com.crt
+#smtpd_tls_key_file       = /etc/ssl/private/mgw.company.com.key
+#smtpd_tls_security_level = may
+#smtpd_tls_loglevel       = 1
+#smtp_tls_security_level  = may
+
+# ─── Allow AUTH over plain connection (no TLS lab environment)────────────────
+smtpd_tls_auth_only = no
+
+# ─── Restrictions ────────────────────────────────────────────────────────────
+smtpd_recipient_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unauth_destination
+
+smtpd_relay_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unauth_destination
+
+# ─── Content filter → mail_filter.py ─────────────────────────────────────────
+content_filter           = smtp:[127.0.0.1]:10025
+receive_override_options = no_address_mappings
