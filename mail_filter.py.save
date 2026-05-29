@@ -1,66 +1,48 @@
 #!/usr/bin/env python3
 """
 ~/MGW/mail_filter.py
-Mail Gateway Filter — Main Controller (v2 — CAPEv2 integrated)
+Mail Gateway Filter — Main Controller
 
-Pipeline:
-  Track A (Semantic)    — phishing signal extraction
-  Track B (Structural)  — text cleaning for NLP/ML
-  Track C (Attachment)  — CAPEv2 sandbox detonation via local API
-
-Scoring:
-  All model results are REPORTED and LOGGED.
-  No combined threshold is applied — every email is FORWARDED regardless.
-  The final decision stage is deferred (set ENFORCE_THRESHOLD=1 to re-enable).
-
-Attachment logs saved to:  ~/MGW/Attachment/<timestamp>_<filename>.json
-Main filter log:           ~/MGW/mail_filter.log
-Sandbox dispatch log:      ~/MGW/sandbox.log
+Multi-layer defence pipeline:
+  Track A (Semantic)    — counts/preserves phishing signals as metadata
+  Track B (Structural)  — cleans & tokenises text for ML/NLP models
+  Track C (Attachment)  — classifies attachments, dispatches to sandbox API
 """
 from __future__ import annotations
 import sys, os, json, logging, asyncio, time, re, html, importlib.util
 from datetime import datetime
 from email import message_from_bytes
+from email.policy import default as email_policy
 import smtplib
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-MGW_ROOT       = os.path.expanduser("~/MGW")
-HEADER_SCRIPT  = os.path.join(MGW_ROOT, "models", "Header",  "header.py")
-BODY_SCRIPT    = os.path.join(MGW_ROOT, "models", "Body",    "body.py")
-SANDBOX_SCRIPT = os.path.join(MGW_ROOT, "models", "Attachment", "sandbox_client.py")
-LOG_FILE       = os.path.join(MGW_ROOT, "mail_filter.log")
-SANDBOX_LOG    = os.path.join(MGW_ROOT, "sandbox.log")
-ATTACHMENT_DIR = os.path.join(MGW_ROOT, "models", "Attachment")
+RISK_THRESHOLD   = 0.70          # overall combined threshold
 
-os.makedirs(ATTACHMENT_DIR, exist_ok=True)
+# ─── Model-selection resource thresholds ─────────────────────────────────────
+CPU_THRESHOLD_PCT  = 75.0        # if CPU  >  this → use TF-IDF fallback
+RAM_THRESHOLD_PCT  = 80.0        # if RAM  >  this → use TF-IDF fallback
 
-# ─── SMTP settings ────────────────────────────────────────────────────────────
-MGW_LISTEN_HOST  = "0.0.0.0"
-MGW_LISTEN_PORT  = 10025
-MAIL_SERVER_HOST = "127.0.0.1"
-MAIL_SERVER_PORT = 10026
+# ─── Score weights (final fusion) ────────────────────────────────────────────
+W_HEADER     = 0.30
+W_BODY       = 0.40
+W_ATTACHMENT = 0.30
 
-# ─── Scoring control ─────────────────────────────────────────────────────────
-# Set ENFORCE_THRESHOLD=1 in environment to re-enable DROP decisions.
-# Default: report only, always forward.
-ENFORCE_THRESHOLD = os.environ.get("ENFORCE_THRESHOLD", "0") == "1"
-RISK_THRESHOLD    = 0.70
+# ─── Sandbox API endpoints (set to real IPs when sandboxes are live) ──────────
+SANDBOX_WIN_URL   = os.environ.get("SANDBOX_WIN_URL",   "http://192.168.200.10:8080")
+SANDBOX_LIN_URL   = os.environ.get("SANDBOX_LIN_URL",   "http://192.168.200.20:8080")
+SANDBOX_API_TOKEN = os.environ.get("SANDBOX_API_TOKEN", "changeme")
 
-# ─── Resource thresholds ─────────────────────────────────────────────────────
-CPU_THRESHOLD_PCT = 75.0
-RAM_THRESHOLD_PCT = 80.0
-
-# ─── Extension sets ──────────────────────────────────────────────────────────
-WIN_ONLY_EXTS = {".exe",".msi",".bat",".cmd",".ps1",".vbs",".lnk"}
-LIN_ONLY_EXTS = {".sh",".elf",".run",".deb",".rpm",".bin"}
-BOTH_EXTS     = {
+# ─── Attachment classification maps ──────────────────────────────────────────
+WIN_ONLY_EXTS  = {".exe",".msi",".bat",".cmd",".ps1",".vbs",".lnk"}
+LIN_ONLY_EXTS  = {".sh",".elf",".run",".deb",".rpm",".bin"}
+BOTH_EXTS      = {
     ".js",".zip",".7z",".rar",".iso",".img",
     ".docm",".xlsm",".pptm",".rtf",".pdf",
     ".html",".htm",".link",
 }
-ARCHIVE_EXTS  = {".zip",".7z",".rar",".iso",".img"}
-OFFICE_EXTS   = {".docm",".xlsm",".pptm",".rtf",".pdf"}
-SCRIPT_EXTS   = {".js",".vbs",".ps1",".bat",".cmd",".sh"}
+ARCHIVE_EXTS   = {".zip",".7z",".rar",".iso",".img"}
+OFFICE_EXTS    = {".docm",".xlsm",".pptm",".rtf",".pdf"}
+SCRIPT_EXTS    = {".js",".vbs",".ps1",".bat",".cmd",".sh"}
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -91,18 +73,21 @@ def _import_script(path: str, name: str):
 
 
 def _resource_health() -> dict:
+    """Return current CPU / RAM usage percentages (requires psutil)."""
     try:
         import psutil
         cpu = psutil.cpu_percent(interval=0.3)
         ram = psutil.virtual_memory().percent
         return {"cpu_pct": cpu, "ram_pct": ram, "healthy": True}
     except ImportError:
+        # psutil not available → assume resources OK
         return {"cpu_pct": 0.0, "ram_pct": 0.0, "healthy": False}
 
 
 def _use_roberta(health: dict) -> bool:
+    """Decide whether to use RoBERTa or TF-IDF based on current load."""
     if not health["healthy"]:
-        return True
+        return True          # can't measure → prefer best model
     overloaded = (
         health["cpu_pct"] > CPU_THRESHOLD_PCT or
         health["ram_pct"] > RAM_THRESHOLD_PCT
@@ -114,11 +99,16 @@ def _use_roberta(health: dict) -> bool:
 # TRACK A — Semantic Preprocessing
 # ══════════════════════════════════════════════════════════════════════════════
 def semantic_track(msg, raw_body: str) -> dict:
+    """
+    Preserve and COUNT all semantic signals that normalisation would destroy.
+    Returns a metadata dict forwarded to every classifier.
+    """
     subject  = msg.get("Subject", "") or ""
     text     = raw_body
     lower    = text.lower()
     subj_low = subject.lower()
 
+    # ── URLs ─────────────────────────────────────────────────────────────────
     url_pattern  = re.compile(
         r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+(?:/[^\s<>"]*)?', re.I)
     href_pattern = re.compile(r'href=["\']([^"\']+)["\']', re.I)
@@ -133,16 +123,17 @@ def semantic_track(msg, raw_body: str) -> dict:
         and m.group(2).strip() not in m.group(1)
     )
 
-    ip_in_url    = sum(1 for u in all_urls
-                       if re.search(r'https?://\d+\.\d+\.\d+\.\d+', u))
-    encoded_urls = sum(1 for u in all_urls if '%' in u)
-    bad_tlds     = {'.tk','.ml','.ga','.cf','.gq','.xyz','.top',
-                    '.club','.online','.site','.work','.date','.loan'}
+    ip_in_url       = sum(1 for u in all_urls
+                          if re.search(r'https?://\d+\.\d+\.\d+\.\d+', u))
+    encoded_urls    = sum(1 for u in all_urls if '%' in u)
+    bad_tlds        = {'.tk','.ml','.ga','.cf','.gq','.xyz','.top',
+                       '.club','.online','.site','.work','.date','.loan'}
     suspicious_tld_count = sum(
         1 for u in all_urls
         if '/' in u and len(u.split('/')) > 2
         and any(u.lower().split('/')[2].endswith(t) for t in bad_tlds))
 
+    # ── Embedded code ─────────────────────────────────────────────────────────
     has_script     = int(bool(re.search(r'<script',          text, re.I)))
     has_onclick    = int(bool(re.search(r'onclick\s*=',       text, re.I)))
     has_onload     = int(bool(re.search(r'onload\s*=',        text, re.I)))
@@ -155,10 +146,12 @@ def semantic_track(msg, raw_body: str) -> dict:
     has_input_pass = int(bool(re.search(
         r'<input[^>]+type=["\']?password', text, re.I)))
 
+    # ── Obfuscation ───────────────────────────────────────────────────────────
     html_entity_count = len(re.findall(r'&[#a-zA-Z0-9]+;', text))
     decoded           = html.unescape(text)
     obfuscated_chars  = int(decoded != text)
 
+    # ── Phishing keywords ─────────────────────────────────────────────────────
     PHISHING_KEYWORDS = [
         "urgent","verify","account","bank","paypal","suspended","click",
         "login","password","credit","social security","ssn","limited",
@@ -174,6 +167,7 @@ def semantic_track(msg, raw_body: str) -> dict:
     total_phishing_kw  = sum(keyword_counts.values())
     unique_phishing_kw = sum(1 for v in keyword_counts.values() if v > 0)
 
+    # ── Composite scores ──────────────────────────────────────────────────────
     urgency_score = min(1.0, sum(lower.count(w) for w in [
         "urgent","immediately","asap","deadline","expire",
         "limited time","action required","hours remaining"]) * 0.2)
@@ -184,6 +178,7 @@ def semantic_track(msg, raw_body: str) -> dict:
         "winner","won","prize","selected","chosen","lucky","claim",
         "congratulations","inheritance","lottery"]) * 0.2)
 
+    # ── Subject signals ───────────────────────────────────────────────────────
     subject_has_urgent  = int(bool(re.search(r'urgent|immediate|asap', subj_low)))
     subject_has_verify  = int(bool(re.search(r'verify|confirm|validate', subj_low)))
     subject_has_alert   = int("alert" in subj_low)
@@ -196,6 +191,7 @@ def semantic_track(msg, raw_body: str) -> dict:
     subject_has_numbers = int(any(c.isdigit() for c in subject))
     subject_has_special = int(any(c in "!@#$%^&*()" for c in subject))
 
+    # ── Authentication ────────────────────────────────────────────────────────
     auth_results = msg.get("Authentication-Results","") or ""
     auth_lower   = auth_results.lower()
     spf_fail     = int("spf=fail"  in auth_lower)
@@ -232,7 +228,7 @@ def semantic_track(msg, raw_body: str) -> dict:
     dollar_count = text.count("$")
     total_money  = dollar_count + text.count("€") + text.count("£")
 
-    return {
+    semantic = {
         "url_count":             len(all_urls),
         "href_url_count":        len(href_urls),
         "url_mismatch_count":    mismatches,
@@ -268,7 +264,7 @@ def semantic_track(msg, raw_body: str) -> dict:
         "subject_has_special":   subject_has_special,
         "subject_length":        len(subject),
         "subject_word_count":    len(subject.split()),
-        "subject_text":          subject,
+        "subject_text":          subject,           # raw text for TF-IDF subject scoring
         "spf_fail":              spf_fail,
         "dkim_fail":             dkim_fail,
         "dmarc_fail":            dmarc_fail,
@@ -290,10 +286,11 @@ def semantic_track(msg, raw_body: str) -> dict:
         "has_reply_to":          int(bool(reply_to)),
         "has_return_path":       int(bool(return_path)),
     }
+    return semantic
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TRACK B — Structural
+# TRACK B — Structural Preprocessing (clean text for NLP)
 # ══════════════════════════════════════════════════════════════════════════════
 def structural_track(raw_body: str) -> str:
     text = raw_body
@@ -308,65 +305,135 @@ def structural_track(raw_body: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TRACK C — Attachment → CAPEv2
+# TRACK C — Attachment Analysis
 # ══════════════════════════════════════════════════════════════════════════════
+def _classify_attachment(filename: str, content_type: str) -> dict:
+    """Determine attachment type and which sandbox(es) to use."""
+    ext = os.path.splitext(filename.lower())[1] if filename else ""
+    result = {
+        "filename":     filename or "unknown",
+        "extension":    ext,
+        "content_type": content_type,
+        "is_executable":    ext in WIN_ONLY_EXTS | LIN_ONLY_EXTS,
+        "is_archive":       ext in ARCHIVE_EXTS,
+        "is_office_macro":  ext in OFFICE_EXTS,
+        "is_script":        ext in SCRIPT_EXTS,
+        "is_shortcut":      ext in {".lnk", ".link"},
+        "is_web":           ext in {".html", ".htm"},
+        "sandbox_targets": [],
+        "risk_base":        0.0,
+    }
+    if ext in WIN_ONLY_EXTS:
+        result["sandbox_targets"] = ["windows"]
+        result["risk_base"]       = 0.75
+    elif ext in LIN_ONLY_EXTS:
+        result["sandbox_targets"] = ["linux"]
+        result["risk_base"]       = 0.65
+    elif ext in BOTH_EXTS:
+        result["sandbox_targets"] = ["windows", "linux"]
+        result["risk_base"]       = 0.60
+    elif ext:
+        result["sandbox_targets"] = ["windows", "linux"]
+        result["risk_base"]       = 0.40
+    return result
+
+
+def _dispatch_to_sandbox(payload_b64: str, meta: dict) -> dict:
+    """
+    Send attachment payload to the appropriate sandbox(es) via HTTP API.
+    Returns sandbox verdict or a default if the sandbox is unreachable.
+    """
+    import urllib.request, base64, json as _json
+
+    targets  = meta.get("sandbox_targets", [])
+    verdicts = []
+    urls_map = {"windows": SANDBOX_WIN_URL, "linux": SANDBOX_LIN_URL}
+
+    for target in targets:
+        url = urls_map.get(target)
+        if not url:
+            continue
+        body_data = _json.dumps({
+            "filename":     meta["filename"],
+            "payload_b64":  payload_b64,
+            "token":        SANDBOX_API_TOKEN,
+        }).encode()
+        endpoint = f"{url}/api/analyze"
+        try:
+            req = urllib.request.Request(
+                endpoint,
+                data=body_data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                verdict = _json.loads(resp.read().decode())
+                verdict["sandbox"] = target
+                verdicts.append(verdict)
+                sandbox_logger.info(
+                    f"[{target.upper()} SANDBOX] file={meta['filename']} "
+                    f"verdict={verdict.get('verdict','?')} "
+                    f"risk={verdict.get('risk_score',0):.4f}"
+                )
+        except Exception as exc:
+            sandbox_logger.warning(
+                f"[{target.upper()} SANDBOX] unreachable for {meta['filename']}: {exc}"
+            )
+            verdicts.append({
+                "sandbox":   target,
+                "verdict":   "timeout",
+                "risk_score": meta.get("risk_base", 0.5),
+            })
+    if not verdicts:
+        return {"verdict": "no_sandbox", "risk_score": meta.get("risk_base", 0.5)}
+
+    # Aggregate: worst-case risk from all sandbox verdicts
+    max_risk = max(v.get("risk_score", 0) for v in verdicts)
+    any_malicious = any(v.get("verdict") == "malicious" for v in verdicts)
+    return {
+        "verdict":   "malicious" if any_malicious else verdicts[0].get("verdict","unknown"),
+        "risk_score": max_risk,
+        "details":   verdicts,
+    }
+
+
 def attachment_track(msg) -> dict:
     """
-    Extract all attachments and dispatch each to CAPEv2 via sandbox_client.
-    Returns aggregate result dict for the verdict log.
+    Extract all attachments, classify each, dispatch to sandbox, return aggregate result.
     """
     import base64
 
-    # Lazy-import sandbox_client so mail_filter works even if sandbox is down
-    try:
-        sc = _import_script(SANDBOX_SCRIPT, "sandbox_client")
-        cape_available = True
-    except Exception as exc:
-        logger.error(f"sandbox_client import failed: {exc}")
-        cape_available = False
-
     attachment_results = []
+    has_any = False
 
     for part in msg.walk():
-        disp     = part.get_content_disposition() or ""
-        ct       = part.get_content_type()
-        filename = part.get_filename() or ""
+        disp      = part.get_content_disposition() or ""
+        ct        = part.get_content_type()
+        filename  = part.get_filename() or ""
 
-        if "attachment" in disp or (
-            filename and
-            ct not in ("text/plain", "text/html", "multipart/mixed")
-        ):
+        # Treat inline images / application parts with filenames as attachments too
+        if "attachment" in disp or (filename and ct != "text/plain"
+                                     and ct != "text/html"
+                                     and ct != "multipart/mixed"):
             payload = part.get_payload(decode=True)
             if payload is None:
                 continue
+            has_any = True
+            meta = _classify_attachment(filename, ct)
 
-            ext = os.path.splitext(filename.lower())[1] if filename else ""
-            logger.info(f"Attachment found: {filename} ({ct}) size={len(payload)}B")
-            sandbox_logger.info(f"Dispatching to CAPE: {filename} ext={ext}")
-
-            if cape_available:
+            # URLs embedded as link attachments (.html, .htm, .link)
+            if meta["is_web"] or meta["is_shortcut"]:
+                # Treat content as text; scan for redirect URLs
                 try:
-                    result = sc.analyze_attachment(filename, payload)
-                    attachment_results.append(result)
-                    sandbox_logger.info(
-                        f"CAPE result: {filename} verdict={result.get('verdict')} "
-                        f"risk={result.get('risk_score',0):.4f} "
-                        f"log={result.get('log_path','?')}"
-                    )
-                except Exception as exc:
-                    logger.error(f"CAPE analysis error for {filename}: {exc}")
-                    attachment_results.append({
-                        "filename":   filename,
-                        "verdict":    "error",
-                        "risk_score": 0.50,
-                        "error":      str(exc),
-                    })
-            else:
-                attachment_results.append({
-                    "filename":   filename,
-                    "verdict":    "cape_unavailable",
-                    "risk_score": 0.40,
-                })
+                    text_content = payload.decode("utf-8", errors="replace")
+                    urls = re.findall(r'https?://\S+', text_content)
+                    meta["embedded_urls"] = urls[:20]
+                except Exception:
+                    meta["embedded_urls"] = []
+
+            payload_b64 = base64.b64encode(payload).decode()
+            verdict     = _dispatch_to_sandbox(payload_b64, meta)
+            attachment_results.append({**meta, **verdict})
 
     if not attachment_results:
         return {"has_attachments": 0, "risk_probability": 0.0, "attachments": []}
@@ -384,6 +451,7 @@ def attachment_track(msg) -> dict:
 # Body extractor
 # ══════════════════════════════════════════════════════════════════════════════
 def extract_body(msg) -> str:
+    """Extract full body including HTML parts for both tracks."""
     parts = []
     if msg.is_multipart():
         for part in msg.walk():
@@ -421,49 +489,32 @@ def analyze_body(clean_text: str, semantic_meta: dict, use_roberta: bool = True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Verdict logger  (report only — no scoring weight applied)
+# Verdict logger
 # ══════════════════════════════════════════════════════════════════════════════
 def log_verdict(meta: dict, header_r: dict, body_r: dict,
-                attach_r: dict, action: str):
+                attach_r: dict, combined: float, action: str):
     ts       = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     h_prob   = header_r.get("risk_probability", 0.0)
     b_prob   = body_r.get("risk_probability",   0.0)
     a_prob   = attach_r.get("risk_probability", 0.0)
     h_engine = header_r.get("engine", "?")
     b_engine = body_r.get("engine",  "?")
-    a_count  = attach_r.get("attachment_count", 0)
-
-    # Per-attachment detail
-    attach_lines = ""
-    for a in attach_r.get("attachments", []):
-        attach_lines += (
-            f"    ├─ {a.get('filename','?'):30s} "
-            f"verdict={a.get('verdict','?'):12s} "
-            f"risk={a.get('risk_score',0):.4f}\n"
-        )
-        for v in a.get("cape_verdicts", []):
-            attach_lines += (
-                f"    │  [{v.get('platform','?'):8s}] "
-                f"task={v.get('task_id','?')} "
-                f"machine={v.get('machine','?')} "
-                f"risk={v.get('risk_score',0):.4f} "
-                f"behaviors={v.get('behaviors',[])}\n"
-            )
 
     block = (
-        f"\n{'='*65}\n"
+        f"\n{'='*60}\n"
         f"[{ts}] Message-ID: {meta['message_id']}\n"
         f"  From : {meta['from']}\n"
         f"  To   : {meta['to']}\n"
-        f"  ── Model Results (report only — no weighting) ─────────\n"
+        f"  ── Model Results ──────────────────────────────────────\n"
         f"  Header  [{h_engine:20s}] risk = {h_prob:.6f}\n"
         f"  Body    [{b_engine:20s}] risk = {b_prob:.6f}\n"
-        f"  Attach  [cape-sandbox        ] risk = {a_prob:.6f}  "
-        f"(count={a_count})\n"
-        f"{attach_lines}"
-        f"  ── Threshold scoring disabled — all emails forwarded ───\n"
+        f"  Attach  [sandbox             ] risk = {a_prob:.6f}  "
+        f"(count={attach_r.get('attachment_count',0)})\n"
+        f"  ── Combined Score ─────────────────────────────────────\n"
+        f"  COMBINED                       risk = {combined:.6f}  "
+        f"threshold={RISK_THRESHOLD}\n"
         f"  ACTION : {action}\n"
-        f"{'='*65}"
+        f"{'='*60}"
     )
     logger.info(block)
 
@@ -479,66 +530,74 @@ def process_message(raw_bytes: bytes):
         "to":         msg.get("To",    "unknown"),
     }
 
+    # ── Resource health check (model selection) ───────────────────────────────
     health      = _resource_health()
     use_roberta = _use_roberta(health)
     logger.info(
-        f"Resource — CPU={health['cpu_pct']:.1f}%  "
+        f"Resource health — CPU={health['cpu_pct']:.1f}%  "
         f"RAM={health['ram_pct']:.1f}%  "
-        f"body_engine={'roberta' if use_roberta else 'tfidf'}"
+        f"→ body_engine={'roberta' if use_roberta else 'tfidf'}"
     )
 
-    raw_body      = extract_body(msg)
-    semantic_meta = semantic_track(msg, raw_body)
-    clean_text    = structural_track(raw_body)
+    # ── Extract raw body ──────────────────────────────────────────────────────
+    raw_body = extract_body(msg)
 
-    # Track C — CAPEv2 sandbox (runs first so report is available for logging)
+    # ── Track A: Semantic ─────────────────────────────────────────────────────
+    semantic_meta = semantic_track(msg, raw_body)
+
+    # ── Track B: Structural ───────────────────────────────────────────────────
+    clean_text = structural_track(raw_body)
+
+    # ── Track C: Attachments → Sandbox ────────────────────────────────────────
     attach_result = attachment_track(msg)
     if attach_result["has_attachments"]:
         logger.info(
-            f"Attachments: {attach_result['attachment_count']}  "
-            f"max_risk={attach_result['risk_probability']:.4f}"
+            f"Attachments detected: {attach_result['attachment_count']}  "
+            f"risk={attach_result['risk_probability']:.4f}"
         )
 
-    # Track A / B — models
+    # ── Model calls ───────────────────────────────────────────────────────────
     header_result = analyze_header(semantic_meta)
     body_result   = analyze_body(clean_text, semantic_meta, use_roberta=use_roberta)
 
+    # ── Combined risk (weighted) ──────────────────────────────────────────────
     h_prob = header_result.get("risk_probability", 0.0)
     b_prob = body_result.get("risk_probability",   0.0)
     a_prob = attach_result.get("risk_probability", 0.0)
 
-    # ── Decision ──────────────────────────────────────────────────────────────
-    if ENFORCE_THRESHOLD:
-        # Weighted score (weights TBD — placeholder equal weighting)
-        combined = (h_prob + b_prob + a_prob) / 3.0
-        if combined >= RISK_THRESHOLD:
-            action = f"DROPPED (enforce_threshold=ON risk={combined:.4f})"
-            logger.warning(f"[DROPPED] {meta['message_id']} risk={combined:.4f}")
-        else:
-            action = f"FORWARDED (enforce_threshold=ON risk={combined:.4f})"
-            _forward(raw_bytes, meta["from"], meta["to"])
+    if attach_result["has_attachments"]:
+        combined = W_HEADER * h_prob + W_BODY * b_prob + W_ATTACHMENT * a_prob
     else:
-        # Report-only mode — always forward
-        action = (
-            f"FORWARDED (report-only mode  "
-            f"header={h_prob:.4f}  body={b_prob:.4f}  attach={a_prob:.4f})"
-        )
+        # Redistribute attachment weight
+        combined = (W_HEADER / (W_HEADER + W_BODY)) * h_prob + \
+                   (W_BODY   / (W_HEADER + W_BODY)) * b_prob
+
+    combined = float(min(combined, 1.0))
+
+    # ── Decision ──────────────────────────────────────────────────────────────
+    if combined >= RISK_THRESHOLD:
+        action = f"DROPPED (risk={combined:.4f} >= threshold={RISK_THRESHOLD})"
+        logger.warning(f"[DROPPED] {meta['message_id']} combined_risk={combined:.4f}")
+    else:
+        action = f"PASSED  (risk={combined:.4f} < threshold={RISK_THRESHOLD})"
+        logger.info(f"[PASS] {meta['message_id']} combined_risk={combined:.4f}")
         _forward(raw_bytes, meta["from"], meta["to"])
 
-    log_verdict(meta, header_result, body_result, attach_result, action)
+    # ── Log full verdict ──────────────────────────────────────────────────────
+    log_verdict(meta, header_result, body_result, attach_result, combined, action)
 
 
 def _forward(raw_bytes, from_addr, to_addr):
     try:
         with smtplib.SMTP(MAIL_SERVER_HOST, MAIL_SERVER_PORT, timeout=30) as s:
             s.sendmail(from_addr, [to_addr], raw_bytes)
-        logger.info(f"Forwarded to {to_addr}")
+        logger.info(f"Email forwarded to {to_addr}")
     except Exception as exc:
         logger.error(f"Forwarding failed: {exc}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SMTP proxy
+# SMTP proxy server
 # ══════════════════════════════════════════════════════════════════════════════
 class SMTPHandler(asyncio.Protocol):
     def __init__(self):
