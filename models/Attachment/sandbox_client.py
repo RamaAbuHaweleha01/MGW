@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-~/MGW/models/Sandbox/sandbox_client.py
+~/MGW/models/Attachment/sandbox_client.py
 CAPEv2-integrated sandbox client.
 
 Submits attachments directly to the LOCAL CAPEv2 REST API on MGW (127.0.0.1:8000).
@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 MGW_ROOT       = Path.home() / "MGW"
-SANDBOX_DIR    = MGW_ROOT / "models" / "Attachment"
-ATTACHMENT_DIR = MGW_ROOT / "models" / "Attachment"
+SANDBOX_DIR    = MGW_ROOT / "models" / "Attachment
+ATTACHMENT_DIR = MGW_ROOT / "Attachment"
 LOG_FILE       = SANDBOX_DIR / "sandbox_client.log"
 
 SANDBOX_DIR.mkdir(parents=True, exist_ok=True)

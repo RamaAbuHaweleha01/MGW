@@ -1,0 +1,4 @@
+# Route all company.com mail to the internal mail server
+company.com    smtp:[10.10.0.20]:25
+*              smtp:[10.10.0.20]:25
+

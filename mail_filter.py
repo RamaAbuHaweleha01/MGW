@@ -29,8 +29,8 @@ HEADER_SCRIPT  = os.path.join(MGW_ROOT, "models", "Header",  "header.py")
 BODY_SCRIPT    = os.path.join(MGW_ROOT, "models", "Body",    "body.py")
 SANDBOX_SCRIPT = os.path.join(MGW_ROOT, "models", "Attachment", "sandbox_client.py")
 LOG_FILE       = os.path.join(MGW_ROOT, "mail_filter.log")
-SANDBOX_LOG    = os.path.join(MGW_ROOT, "sandbox.log")
-ATTACHMENT_DIR = os.path.join(MGW_ROOT, "models", "Attachment")
+SANDBOX_LOG    = os.path.join(MGW_ROOT, "Attachment", "sandbox.log")
+ATTACHMENT_DIR = os.path.join(MGW_ROOT, "Attachment")
 
 os.makedirs(ATTACHMENT_DIR, exist_ok=True)
 
