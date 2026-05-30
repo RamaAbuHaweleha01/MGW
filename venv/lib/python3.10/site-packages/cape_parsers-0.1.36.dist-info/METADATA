@@ -1,0 +1,34 @@
+Metadata-Version: 2.3
+Name: CAPE-parsers
+Version: 0.1.36
+Summary: CAPE: Malware Configuration Extraction
+License: MIT
+Keywords: cape,parsers,malware,configuration
+Author: Kevin O'Reilly
+Author-email: kev@capesandbox.com
+Requires-Python: >=3.10,<4.0
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Provides-Extra: maco
+Requires-Dist: capstone (>=4.0.2)
+Requires-Dist: dncil (>=1.0.2)
+Requires-Dist: dnfile (>=0.15.1)
+Requires-Dist: maco (==1.1.8) ; extra == "maco"
+Requires-Dist: netstruct (==1.1.2)
+Requires-Dist: pefile
+Requires-Dist: pycryptodomex (>=3.20.0)
+Requires-Dist: rat-king-parser (>=4.1.0)
+Requires-Dist: ruff (>=0.7.2)
+Requires-Dist: unicorn (==2.1.1)
+Requires-Dist: yara-python (>=4.5.1)
+Description-Content-Type: text/markdown
+
+# CAPE-parsers
+CAPE core and community parsers
+
+[![PyPI version](https://img.shields.io/pypi/v/CAPE-parsers)](https://pypi.org/project/CAPE-parsers/)
+

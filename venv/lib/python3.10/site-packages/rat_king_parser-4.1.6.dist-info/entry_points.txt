@@ -1,0 +1,2 @@
+[console_scripts]
+rat-king-parser = rat_king_parser:main

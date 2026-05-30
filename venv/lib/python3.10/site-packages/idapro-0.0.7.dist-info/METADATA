@@ -1,0 +1,209 @@
+Metadata-Version: 2.4
+Name: idapro
+Version: 0.0.7
+Summary: IDA Library Python module
+Author: Hex-Rays SA
+Author-email: support@hex-rays.com
+License: MIT
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Software Development :: Disassemblers
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: license
+Dynamic: license-file
+Dynamic: requires-python
+Dynamic: summary
+
+
+# IDA Library Python Module
+The IDA Library Python module enables running IDA Pro as an independent Python package outside the IDA UI environment, allowing for programmatic binary analysis and reverse engineering tasks.
+
+## Prerequisites
+### Environment Setup
+Set the `IDADIR` environment variable to point to your IDA installation directory:
+
+**Linux/macOS:**
+```bash
+export IDADIR="/path/to/your/ida/installation"
+```
+
+**Windows:**
+```cmd
+set IDADIR="C:\Program Files\IDA Pro 9.1"
+```
+
+**Example paths:**
+- **macOS:** `/Applications/IDA Professional 9.1.app/Contents/MacOS/`
+- **Windows:** `C:\Program Files\IDA Pro 9.1\`
+- **Linux:** `/opt/ida-9.1/`
+
+> **Note:** If you have already installed and configured the `idapro` Python package in the past using script provided with IDA installation package, setting `IDADIR` is not required.
+
+## Usage example:
+```python
+#!/usr/bin/env python3
+"""
+IDA Pro Python Library Usage Example
+This example demonstrates how to analyze a binary file using IDA Pro Python library.
+"""
+
+import argparse
+import importlib.metadata
+
+# You need to import first idapro module
+import idapro
+
+# After idapro module was loaded, you can simply import IDA Python modules
+import ida_entry
+import ida_nalt
+import idaapi
+import idc
+import idautils
+import ida_ida
+import ida_funcs
+import ida_name
+import ida_bytes
+import ida_typeinf
+
+# Read versions, configured IDA pro kernel and python package
+kern_major, kern_minor, kern_build = idapro.get_library_version()
+idapro_version = importlib.metadata.version('idapro')
+kernel_path = idapro.get_ida_install_dir()
+
+# Parse input arguments
+parser = argparse.ArgumentParser(description=f"IDA Library usage example, idapro version: {idapro_version}, "
+    f"kernel version: {kern_major}.{kern_minor}.{kern_build}, kernel libraries path: {kernel_path}")
+parser.add_argument(
+    "-f",
+    "--input-file",
+    help="Binary input file to be loaded",
+    type=str,
+    required=True,
+    default=None
+)
+args = parser.parse_args()
+
+# Print banner with components versions
+print(f"{parser.description}\n")
+
+# Open database
+if idapro.open_database(args.input_file, True) == 0:
+    # Extract minimum/maxim addresses
+    min_ea = ida_ida.inf_get_min_ea()
+    max_ea = ida_ida.inf_get_max_ea()
+    print(f"Addresses range: {hex(min_ea)} - {hex(max_ea)}")
+
+    # Print entry point
+    entry_point = ida_entry.get_entry_ordinal(0)
+    if entry_point != idaapi.BADADDR:
+        entry_addr = ida_entry.get_entry(entry_point)
+        print(f"Entry point: {hex(entry_addr)}")
+
+    # Print some metadata
+    print(f"Metadata:")
+    print(f" path: {idaapi.get_input_file_path()}")
+    print(f" module: {idaapi.get_root_filename()}")
+    print(f" base: {hex(idaapi.get_imagebase())}")
+    print(f" filesize: {hex(ida_nalt.retrieve_input_file_size())}")
+    print(f" md5: {ida_nalt.retrieve_input_file_md5()}")
+    print(f" sha256: {ida_nalt.retrieve_input_file_sha256()}")
+    print(f" crc32: {hex(ida_nalt.retrieve_input_file_crc32())}")
+
+    # Iterate functions
+    for func_ea in idautils.Functions():
+        f = ida_funcs.get_func(func_ea)
+        print(f"Function - name {f.name}, start ea {hex(f.start_ea)}, end ea {hex(f.end_ea)}")
+
+    for seg_ea in idautils.Segments():
+        name = idc.get_segm_name(seg_ea)
+        print(f"Segment - name {name}")
+
+    # Iterate types
+    til = ida_typeinf.get_idati()
+    if til:
+      max_ord = ida_typeinf.get_ordinal_limit(til)
+      current_index = -1
+      current_named_type = None
+
+      while current_index < max_ord - 1:
+          current_index += 1
+          tinfo = ida_typeinf.tinfo_t()
+          if tinfo.get_numbered_type(til, current_index):
+              print(f"Type - id {tinfo.get_tid()}")
+
+      while True:
+          if current_named_type is None:
+              current_named_type = ida_typeinf.first_named_type(til, ida_typeinf.NTF_TYPE)
+          else:
+              current_named_type = ida_typeinf.next_named_type(til, current_named_type, ida_typeinf.NTF_TYPE)
+
+          if not current_named_type:
+              break
+
+          tinfo = ida_typeinf.tinfo_t()
+          if tinfo.get_named_type(til, current_named_type):
+              print(f"Type - name {tinfo.get_type_name()}, id {tinfo.get_tid()}")
+
+    # Iterate comments
+    for ea in idautils.Heads(min_ea, max_ea):
+        cmt = idc.get_cmt(ea, 0)
+        if cmt:
+            print(f"Comment - value {cmt}")
+
+    # Iterate strings
+    for s in idautils.Strings():
+        print(f"String - value {s}")
+
+    for ea, name in idautils.Names():
+        print(f"Name - value {name}")
+
+    # Iterate basic blocks
+    for func_ea in idautils.Functions():
+        func = ida_funcs.get_func(func_ea)
+        if func:
+            fc = idaapi.FlowChart(func)
+            for b in fc:
+                print(f"Basic block - start ea {hex(b.start_ea)}, end ea {hex(b.end_ea)}")
+
+    # Iterate binary instructions
+    for ea in idautils.Heads(min_ea, max_ea):
+        if ida_bytes.is_code(ida_bytes.get_flags(ea)):
+            disasm = idc.generate_disasm_line(ea, 0)
+            print(f"Instruction - ea {hex(ea)}, asm {disasm}")
+
+    # Close database discarding the changes
+    idapro.close_database(False)
+```
+
+## Type Hints
+This package automatically installs type stubs for all IDA Python modules, providing IDE support with autocompletion and type checking for IDA Python modules
+
+Type hints are installed automatically during package installation!
+
+## Troubleshooting
+### Common Issues
+**ModuleNotFoundError: No module named 'idapro'**
+- Ensure `IDADIR` is set correctly
+- Verify IDA Pro is properly installed
+
+**License Issues**
+- Ensure you have a valid IDA Pro license
+- Check that IDA can run normally in GUI mode first
+
+**Type hints not working**
+- Restart your IDE after installation
+- Check that .pyi files exist in your site-packages directory
+
+## API Reference
+For detailed API documentation, refer to:
+- IDA Python documentation at https://python.docs.hex-rays.com/
+- Built-in help: `help(idapro)` after importing
+- IDA Pro SDK documentation https://docs.hex-rays.com/developer-guide/c++-sdk

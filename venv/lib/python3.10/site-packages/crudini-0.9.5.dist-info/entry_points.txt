@@ -1,0 +1,2 @@
+[console_scripts]
+crudini = crudini:main

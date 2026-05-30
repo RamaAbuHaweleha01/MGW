@@ -1,0 +1,7 @@
+# Copyright (C) 2015-2018 Jurriaan Bremer.
+# This file is part of SFlock - http://www.sflock.org/.
+# See the file 'docs/LICENSE.txt' for copying permission.
+
+import magic
+from sflock.exception import UnpackException
+from sflock.main import ident, unpack, supported, zipify

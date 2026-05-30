@@ -1,0 +1,3 @@
+[console_scripts]
+pyattck=pyattck.cli:main
+

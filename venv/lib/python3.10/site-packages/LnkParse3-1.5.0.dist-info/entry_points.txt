@@ -1,0 +1,2 @@
+[console_scripts]
+lnkparse = LnkParse3.lnk_file:main

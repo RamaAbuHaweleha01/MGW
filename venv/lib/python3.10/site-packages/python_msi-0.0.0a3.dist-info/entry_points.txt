@@ -1,0 +1,2 @@
+[console_scripts]
+pymsi = pymsi.__main__:main

@@ -1,0 +1,3 @@
+[console_scripts]
+hcli = hcli.main:cli
+ida-hcli = hcli.main:cli

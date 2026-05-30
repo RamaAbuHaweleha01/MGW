@@ -1,0 +1,12 @@
+Metadata-Version: 2.1
+Name: maco
+Version: 1.1.8
+Author: 
+Author-email: 
+Requires-Python: >=3.8
+License-File: LICENSE.md
+Requires-Dist: cart
+Requires-Dist: pydantic >=2.0.0
+Requires-Dist: yara-python
+Requires-Dist: tomli >=1.1.0 ; python_version < "3.11"
+

@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import requests
+import rich_click as click
+
+from hcli.lib.console import console
+from hcli.lib.ida import (
+    MissingCurrentInstallationDirectory,
+    explain_missing_current_installation_directory,
+    find_current_ida_platform,
+    find_current_ida_version,
+)
+from hcli.lib.ida.plugin import get_metadata_from_plugin_archive
+from hcli.lib.ida.plugin.install import upgrade_plugin_archive
+from hcli.lib.ida.plugin.repo import BasePluginRepo
+
+logger = logging.getLogger(__name__)
+
+
+@click.command()
+@click.pass_context
+@click.argument("plugin")
+def upgrade_plugin(ctx, plugin: str) -> None:
+    """Upgrade an installed plugin to the latest compatible version."""
+    plugin_spec = plugin
+    try:
+        current_ida_platform = find_current_ida_platform()
+        current_ida_version = find_current_ida_version()
+
+        if Path(plugin_spec).exists() and plugin_spec.endswith(".zip"):
+            raise ValueError("cannot upgrade using local file; uninstall/reinstall instead")
+
+        if plugin_spec.startswith("file://"):
+            raise ValueError("cannot upgrade using local file; uninstall/reinstall instead")
+
+        if plugin_spec.startswith("https://"):
+            raise ValueError("cannot upgrade using URL; uninstall/reinstall instead")
+
+        logger.info("finding plugin in repository")
+        plugin_repo: BasePluginRepo = ctx.obj["plugin_repo"]
+        try:
+            plugin_name, buf = plugin_repo.fetch_compatible_plugin_from_spec(
+                plugin_spec, current_ida_platform, current_ida_version
+            )
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            console.print("[red]Cannot connect to plugin repository - network unavailable.[/red]")
+            console.print("Please check your internet connection.")
+            raise click.Abort()
+
+        upgrade_plugin_archive(buf, plugin_name)
+
+        _, metadata = get_metadata_from_plugin_archive(buf, plugin_name)
+
+        console.print(f"[green]Installed[/green] plugin: [blue]{plugin_name}[/blue]=={metadata.plugin.version}")
+    except MissingCurrentInstallationDirectory:
+        explain_missing_current_installation_directory(console)
+        raise click.Abort()
+
+    except Exception as e:
+        logger.debug("error: %s", e, exc_info=True)
+        console.print(f"[red]Error[/red]: {e}")
+        raise click.Abort()
