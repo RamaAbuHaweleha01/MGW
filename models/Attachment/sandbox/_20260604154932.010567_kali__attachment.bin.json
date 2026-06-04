@@ -1,0 +1,19 @@
+{
+  "filename": "attachment.bin",
+  "extension": ".bin",
+  "platforms": [
+    "linux"
+  ],
+  "timestamp": "2026-06-04T19:54:35.000571+00:00",
+  "cape_verdicts": [
+    {
+      "platform": "linux",
+      "verdict": "timeout",
+      "risk_score": 0.5,
+      "task_id": 30
+    }
+  ],
+  "redirect_chain": [],
+  "verdict": "suspicious",
+  "risk_score": 0.5
+}

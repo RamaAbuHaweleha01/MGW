@@ -1,0 +1,41 @@
+{
+  "filename": "eicar.com",
+  "extension": ".com",
+  "platforms": [
+    "windows",
+    "linux"
+  ],
+  "timestamp": "2026-06-04T19:48:01.127061+00:00",
+  "cape_verdicts": [
+    {
+      "verdict": "clean",
+      "risk_score": 0.0,
+      "malscore": 0.0,
+      "behaviors": [],
+      "behavior_risk": 0.0,
+      "machine": "CAPE_WIN",
+      "platform": "windows",
+      "duration": 51,
+      "task_id": 27,
+      "signatures": [],
+      "network": {
+        "hosts": [
+          "135.233.95.144",
+          "199.232.214.172"
+        ],
+        "domains": []
+      },
+      "dropped_files": 0,
+      "processes": []
+    },
+    {
+      "platform": "linux",
+      "verdict": "timeout",
+      "risk_score": 0.5,
+      "task_id": 28
+    }
+  ],
+  "redirect_chain": [],
+  "verdict": "suspicious",
+  "risk_score": 0.5
+}

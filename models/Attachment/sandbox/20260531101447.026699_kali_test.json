@@ -1,0 +1,57 @@
+{
+  "message_id": "<20260531101447.026699@kali>",
+  "filename": "test",
+  "extension": "",
+  "platforms": [
+    "windows",
+    "linux"
+  ],
+  "timestamp": "2026-05-31T14:16:39.247224+00:00",
+  "cape_verdicts": [
+    {
+      "verdict": "clean",
+      "risk_score": 0.0,
+      "malscore": 0.0,
+      "behaviors": [],
+      "behavior_risk": 0.0,
+      "machine": "CAPE_WIN",
+      "platform": "windows",
+      "duration": 50,
+      "task_id": 11,
+      "signatures": [],
+      "network": {
+        "hosts": [
+          "135.233.95.144",
+          "199.232.214.172"
+        ],
+        "domains": []
+      },
+      "dropped_files": 0,
+      "processes": []
+    },
+    {
+      "verdict": "clean",
+      "risk_score": 0.0,
+      "malscore": 0.0,
+      "behaviors": [],
+      "behavior_risk": 0.0,
+      "machine": "CAPE_WIN",
+      "platform": "linux",
+      "duration": 44,
+      "task_id": 12,
+      "signatures": [],
+      "network": {
+        "hosts": [
+          "135.233.95.144",
+          "199.232.214.172"
+        ],
+        "domains": []
+      },
+      "dropped_files": 0,
+      "processes": []
+    }
+  ],
+  "redirect_chain": [],
+  "verdict": "clean",
+  "risk_score": 0.0
+}

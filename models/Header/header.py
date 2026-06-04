@@ -125,7 +125,7 @@ def _load_or_train_xgb():
     dfs = []
     for c in csvs:
         try:
-            dfs.append(pd.read_csv(c, low_memory=False))
+           pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')
         except Exception as e:
             logger.warning(f"Cannot read {c.name}: {e}")
     if not dfs:
@@ -185,7 +185,7 @@ def _load_or_train_subject_tfidf():
     if not master.exists():
         return None
 
-    df = pd.read_csv(master, low_memory=False)
+    df = pd.read_csv(master, low_memory=False, engine='python', on_bad_lines='skip', encoding_errors='replace')
     if "label" not in df.columns:
         return None
     subj_col = next((c for c in ["subject","Subject"] if c in df.columns), None)

@@ -1,38 +1,51 @@
 #!/usr/bin/env python3
 """
 ~/MGW/mail_filter.py
-Mail Gateway Filter — Main Controller (v2 — CAPEv2 integrated)
+Mail Gateway Filter — Main Controller (v3)
 
 Pipeline:
-  Track A (Semantic)    — phishing signal extraction
-  Track B (Structural)  — text cleaning for NLP/ML
-  Track C (Attachment)  — CAPEv2 sandbox detonation via local API
+  Track A  (Semantic)   — phishing signal extraction and metadata
+  Track B  (Structural) — text cleaning for NLP/ML body analysis
+  Track C  (Attachment) — CAPEv2 sandbox detonation via local CAPE API
+
+Directory layout:
+  ~/MGW/
+    mail_filter.py
+    mail_filter.log
+    sandbox.log
+    models/
+      Header/     header.py
+      Body/       body.py
+      Attachment/
+        sandbox_client.py
+        sandbox/          <- per-email attachment logs named by Message-ID
 
 Scoring:
-  All model results are REPORTED and LOGGED.
-  No combined threshold is applied — every email is FORWARDED regardless.
-  The final decision stage is deferred (set ENFORCE_THRESHOLD=1 to re-enable).
+  All three model scores are reported in the log.
+  Combined weighting is DISABLED — every email is FORWARDED.
+  Set environment variable ENFORCE_THRESHOLD=1 to re-enable DROP decisions.
 
-Attachment logs saved to:  ~/MGW/Attachment/<timestamp>_<filename>.json
-Main filter log:           ~/MGW/mail_filter.log
-Sandbox dispatch log:      ~/MGW/sandbox.log
+SMTP timeout fix:
+  The SMTP proxy no longer blocks on sandbox analysis during the connection.
+  Attachment analysis runs AFTER the SMTP session is complete (post-DATA).
 """
 from __future__ import annotations
 import sys, os, json, logging, asyncio, time, re, html, importlib.util
 from datetime import datetime
 from email import message_from_bytes
 import smtplib
+import warnings
+import pandas as pd
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-MGW_ROOT       = os.path.expanduser("~/MGW")
-HEADER_SCRIPT  = os.path.join(MGW_ROOT, "models", "Header",  "header.py")
-BODY_SCRIPT    = os.path.join(MGW_ROOT, "models", "Body",    "body.py")
-SANDBOX_SCRIPT = os.path.join(MGW_ROOT, "models", "Attachment", "sandbox_client.py")
-LOG_FILE       = os.path.join(MGW_ROOT, "mail_filter.log")
-SANDBOX_LOG    = os.path.join(MGW_ROOT, "Attachment", "sandbox.log")
-ATTACHMENT_DIR = os.path.join(MGW_ROOT, "Attachment")
+MGW_ROOT          = os.path.expanduser("~/MGW")
+HEADER_SCRIPT     = os.path.join(MGW_ROOT, "models", "Header",     "header.py")
+BODY_SCRIPT       = os.path.join(MGW_ROOT, "models", "Body",       "body.py")
+SANDBOX_SCRIPT    = os.path.join(MGW_ROOT, "models", "Attachment", "sandbox_client.py")
+LOG_FILE          = os.path.join(MGW_ROOT, "mail_filter.log")
+SANDBOX_LOG       = os.path.join(MGW_ROOT, "models", "Attachment", "sandbox.log")
 
-os.makedirs(ATTACHMENT_DIR, exist_ok=True)
+os.makedirs(os.path.join(MGW_ROOT, "models", "Attachment", "sandbox"), exist_ok=True)
 
 # ─── SMTP settings ────────────────────────────────────────────────────────────
 MGW_LISTEN_HOST  = "0.0.0.0"
@@ -41,8 +54,6 @@ MAIL_SERVER_HOST = "127.0.0.1"
 MAIL_SERVER_PORT = 10026
 
 # ─── Scoring control ─────────────────────────────────────────────────────────
-# Set ENFORCE_THRESHOLD=1 in environment to re-enable DROP decisions.
-# Default: report only, always forward.
 ENFORCE_THRESHOLD = os.environ.get("ENFORCE_THRESHOLD", "0") == "1"
 RISK_THRESHOLD    = 0.70
 
@@ -58,9 +69,6 @@ BOTH_EXTS     = {
     ".docm",".xlsm",".pptm",".rtf",".pdf",
     ".html",".htm",".link",
 }
-ARCHIVE_EXTS  = {".zip",".7z",".rar",".iso",".img"}
-OFFICE_EXTS   = {".docm",".xlsm",".pptm",".rtf",".pdf"}
-SCRIPT_EXTS   = {".js",".vbs",".ps1",".bat",".cmd",".sh"}
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -79,6 +87,12 @@ sandbox_logger = logging.getLogger("sandbox_dispatch")
 sandbox_logger.addHandler(s_handler)
 sandbox_logger.setLevel(logging.INFO)
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Suppress pandas CSV tokenization warnings from TREC datasets
+warnings.filterwarnings("ignore", category=pd.errors.ParserWarning)
+warnings.filterwarnings("ignore", message=".*tokenizing.*")
+warnings.filterwarnings("ignore", message=".*Buffer overflow.*")
+warnings.filterwarnings("ignore", message=".*bad line.*")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Utilities
@@ -93,9 +107,11 @@ def _import_script(path: str, name: str):
 def _resource_health() -> dict:
     try:
         import psutil
-        cpu = psutil.cpu_percent(interval=0.3)
-        ram = psutil.virtual_memory().percent
-        return {"cpu_pct": cpu, "ram_pct": ram, "healthy": True}
+        return {
+            "cpu_pct": psutil.cpu_percent(interval=0.3),
+            "ram_pct": psutil.virtual_memory().percent,
+            "healthy": True,
+        }
     except ImportError:
         return {"cpu_pct": 0.0, "ram_pct": 0.0, "healthy": False}
 
@@ -103,16 +119,16 @@ def _resource_health() -> dict:
 def _use_roberta(health: dict) -> bool:
     if not health["healthy"]:
         return True
-    overloaded = (
+    return not (
         health["cpu_pct"] > CPU_THRESHOLD_PCT or
         health["ram_pct"] > RAM_THRESHOLD_PCT
     )
-    return not overloaded
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TRACK A — Semantic Preprocessing
 # ══════════════════════════════════════════════════════════════════════════════
+
 def semantic_track(msg, raw_body: str) -> dict:
     subject  = msg.get("Subject", "") or ""
     text     = raw_body
@@ -295,6 +311,7 @@ def semantic_track(msg, raw_body: str) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 # TRACK B — Structural
 # ══════════════════════════════════════════════════════════════════════════════
+
 def structural_track(raw_body: str) -> str:
     text = raw_body
     text = re.sub(r'https?://\S+',                   ' URL_TOKEN ',   text)
@@ -308,22 +325,20 @@ def structural_track(raw_body: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TRACK C — Attachment → CAPEv2
+# TRACK C — Attachment -> CAPEv2
 # ══════════════════════════════════════════════════════════════════════════════
-def attachment_track(msg) -> dict:
-    """
-    Extract all attachments and dispatch each to CAPEv2 via sandbox_client.
-    Returns aggregate result dict for the verdict log.
-    """
-    import base64
 
-    # Lazy-import sandbox_client so mail_filter works even if sandbox is down
+def attachment_track(msg, message_id: str) -> dict:
+    """
+    Extract all attachments, dispatch each to CAPEv2 via sandbox_client.
+    Passes message_id so logs are named <message_id>_<filename>.json
+    """
+    # Lazy-import sandbox_client from the Attachment model directory
+    sc = None
     try:
         sc = _import_script(SANDBOX_SCRIPT, "sandbox_client")
-        cape_available = True
     except Exception as exc:
         logger.error(f"sandbox_client import failed: {exc}")
-        cape_available = False
 
     attachment_results = []
 
@@ -332,26 +347,52 @@ def attachment_track(msg) -> dict:
         ct       = part.get_content_type()
         filename = part.get_filename() or ""
 
-        if "attachment" in disp or (
-            filename and
-            ct not in ("text/plain", "text/html", "multipart/mixed")
+        # Catch attachments: explicit disposition, named files,
+        # or any binary content-type that is not text/html/multipart
+        is_binary_ct = ct not in (
+            "text/plain", "text/html", "multipart/mixed",
+            "multipart/alternative", "multipart/related",
+        )
+        if "attachment" in disp or filename or (
+            is_binary_ct and part.get_payload(decode=True) is not None
+            and not msg.is_multipart()
         ):
+            # Generate a fallback filename from content-type if missing
+            if not filename:
+                ext_map = {
+                    "application/pdf":        ".pdf",
+                    "application/zip":        ".zip",
+                    "application/octet-stream": ".bin",
+                    "application/x-sh":       ".sh",
+                    "application/x-msdos-program": ".exe",
+                    "text/x-shellscript":     ".sh",
+                }
+                filename = f"attachment{ext_map.get(ct, '.bin')}"
             payload = part.get_payload(decode=True)
             if payload is None:
                 continue
 
             ext = os.path.splitext(filename.lower())[1] if filename else ""
-            logger.info(f"Attachment found: {filename} ({ct}) size={len(payload)}B")
-            sandbox_logger.info(f"Dispatching to CAPE: {filename} ext={ext}")
+            logger.info(
+                f"Attachment: {filename} ({ct}) "
+                f"size={len(payload)}B ext={ext}"
+            )
+            sandbox_logger.info(
+                f"Dispatching to CAPE: {filename}  "
+                f"message_id={message_id}"
+            )
 
-            if cape_available:
+            if sc is not None:
                 try:
-                    result = sc.analyze_attachment(filename, payload)
+                    result = sc.analyze_attachment(
+                        filename, payload, message_id=message_id
+                    )
                     attachment_results.append(result)
                     sandbox_logger.info(
-                        f"CAPE result: {filename} verdict={result.get('verdict')} "
-                        f"risk={result.get('risk_score',0):.4f} "
-                        f"log={result.get('log_path','?')}"
+                        f"CAPE result: {filename} "
+                        f"verdict={result.get('verdict')} "
+                        f"risk={result.get('risk_score', 0):.4f} "
+                        f"log={result.get('log_path', '?')}"
                     )
                 except Exception as exc:
                     logger.error(f"CAPE analysis error for {filename}: {exc}")
@@ -383,6 +424,7 @@ def attachment_track(msg) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 # Body extractor
 # ══════════════════════════════════════════════════════════════════════════════
+
 def extract_body(msg) -> str:
     parts = []
     if msg.is_multipart():
@@ -402,6 +444,7 @@ def extract_body(msg) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 # Model callers
 # ══════════════════════════════════════════════════════════════════════════════
+
 def analyze_header(semantic_meta: dict) -> dict:
     try:
         mod = _import_script(HEADER_SCRIPT, "header_analyzer")
@@ -411,7 +454,8 @@ def analyze_header(semantic_meta: dict) -> dict:
         return {"risk_probability": 0.5, "risk_factors": [str(exc)], "engine": "error"}
 
 
-def analyze_body(clean_text: str, semantic_meta: dict, use_roberta: bool = True) -> dict:
+def analyze_body(clean_text: str, semantic_meta: dict,
+                 use_roberta: bool = True) -> dict:
     try:
         mod = _import_script(BODY_SCRIPT, "body_analyzer")
         return mod.analyze(clean_text, semantic_meta, use_roberta=use_roberta)
@@ -421,8 +465,9 @@ def analyze_body(clean_text: str, semantic_meta: dict, use_roberta: bool = True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Verdict logger  (report only — no scoring weight applied)
+# Verdict logger
 # ══════════════════════════════════════════════════════════════════════════════
+
 def log_verdict(meta: dict, header_r: dict, body_r: dict,
                 attach_r: dict, action: str):
     ts       = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -433,37 +478,39 @@ def log_verdict(meta: dict, header_r: dict, body_r: dict,
     b_engine = body_r.get("engine",  "?")
     a_count  = attach_r.get("attachment_count", 0)
 
-    # Per-attachment detail
     attach_lines = ""
     for a in attach_r.get("attachments", []):
         attach_lines += (
-            f"    ├─ {a.get('filename','?'):30s} "
-            f"verdict={a.get('verdict','?'):12s} "
+            f"    +-- {a.get('filename','?'):30s} "
+            f"verdict={a.get('verdict','?'):14s} "
             f"risk={a.get('risk_score',0):.4f}\n"
         )
         for v in a.get("cape_verdicts", []):
             attach_lines += (
-                f"    │  [{v.get('platform','?'):8s}] "
+                f"         [{v.get('platform','?'):8s}] "
                 f"task={v.get('task_id','?')} "
                 f"machine={v.get('machine','?')} "
                 f"risk={v.get('risk_score',0):.4f} "
+                f"dur={v.get('duration',0)}s "
                 f"behaviors={v.get('behaviors',[])}\n"
             )
+        if a.get("log_path"):
+            attach_lines += f"         log -> {a['log_path']}\n"
 
     block = (
-        f"\n{'='*65}\n"
+        f"\n{'='*68}\n"
         f"[{ts}] Message-ID: {meta['message_id']}\n"
         f"  From : {meta['from']}\n"
         f"  To   : {meta['to']}\n"
-        f"  ── Model Results (report only — no weighting) ─────────\n"
+        f"  ── Model Results (report-only — no weighting applied) ────\n"
         f"  Header  [{h_engine:20s}] risk = {h_prob:.6f}\n"
         f"  Body    [{b_engine:20s}] risk = {b_prob:.6f}\n"
         f"  Attach  [cape-sandbox        ] risk = {a_prob:.6f}  "
         f"(count={a_count})\n"
         f"{attach_lines}"
-        f"  ── Threshold scoring disabled — all emails forwarded ───\n"
+        f"  ─────────────────────────────────────────────────────────\n"
         f"  ACTION : {action}\n"
-        f"{'='*65}"
+        f"{'='*68}"
     )
     logger.info(block)
 
@@ -471,10 +518,12 @@ def log_verdict(meta: dict, header_r: dict, body_r: dict,
 # ══════════════════════════════════════════════════════════════════════════════
 # Core pipeline
 # ══════════════════════════════════════════════════════════════════════════════
+
 def process_message(raw_bytes: bytes):
-    msg  = message_from_bytes(raw_bytes)
+    msg = message_from_bytes(raw_bytes)
+    message_id = msg.get("Message-ID", f"<gen-{time.time()}@mgw>")
     meta = {
-        "message_id": msg.get("Message-ID", f"<gen-{time.time()}@mgw>"),
+        "message_id": message_id,
         "from":       msg.get("From",  "unknown"),
         "to":         msg.get("To",    "unknown"),
     }
@@ -491,94 +540,132 @@ def process_message(raw_bytes: bytes):
     semantic_meta = semantic_track(msg, raw_body)
     clean_text    = structural_track(raw_body)
 
-    # Track C — CAPEv2 sandbox (runs first so report is available for logging)
-    attach_result = attachment_track(msg)
+    # Track C — runs before models so CAPE analysis is included in the log
+    attach_result = attachment_track(msg, message_id)
     if attach_result["has_attachments"]:
         logger.info(
             f"Attachments: {attach_result['attachment_count']}  "
             f"max_risk={attach_result['risk_probability']:.4f}"
         )
 
-    # Track A / B — models
+    # Track A and B
     header_result = analyze_header(semantic_meta)
-    body_result   = analyze_body(clean_text, semantic_meta, use_roberta=use_roberta)
+    body_result   = analyze_body(clean_text, semantic_meta,
+                                  use_roberta=use_roberta)
 
     h_prob = header_result.get("risk_probability", 0.0)
     b_prob = body_result.get("risk_probability",   0.0)
     a_prob = attach_result.get("risk_probability", 0.0)
 
-    # ── Decision ──────────────────────────────────────────────────────────────
     if ENFORCE_THRESHOLD:
-        # Weighted score (weights TBD — placeholder equal weighting)
         combined = (h_prob + b_prob + a_prob) / 3.0
         if combined >= RISK_THRESHOLD:
-            action = f"DROPPED (enforce_threshold=ON risk={combined:.4f})"
-            logger.warning(f"[DROPPED] {meta['message_id']} risk={combined:.4f}")
+            action = (f"DROPPED "
+                      f"(enforce=ON  combined={combined:.4f}  "
+                      f"threshold={RISK_THRESHOLD})")
+            logger.warning(
+                f"[DROPPED] {message_id} combined={combined:.4f}"
+            )
         else:
-            action = f"FORWARDED (enforce_threshold=ON risk={combined:.4f})"
+            action = (f"FORWARDED "
+                      f"(enforce=ON  combined={combined:.4f}  "
+                      f"threshold={RISK_THRESHOLD})")
             _forward(raw_bytes, meta["from"], meta["to"])
     else:
-        # Report-only mode — always forward
         action = (
-            f"FORWARDED (report-only mode  "
-            f"header={h_prob:.4f}  body={b_prob:.4f}  attach={a_prob:.4f})"
+            f"FORWARDED  [report-only]  "
+            f"header={h_prob:.4f}  body={b_prob:.4f}  attach={a_prob:.4f}"
         )
         _forward(raw_bytes, meta["from"], meta["to"])
 
     log_verdict(meta, header_result, body_result, attach_result, action)
 
 
-def _forward(raw_bytes, from_addr, to_addr):
+def _extract_email(addr: str) -> str:
+    """
+    Extract bare email address from strings like:
+      'Display Name <user@domain.com>'  -> 'user@domain.com'
+      'user@domain.com'                 -> 'user@domain.com'
+      '<user@domain.com>'               -> 'user@domain.com'
+    """
+    if not addr:
+        return addr
+    # Try angle-bracket form first
+    m = re.search(r'<([^>]+)>', addr)
+    if m:
+        return m.group(1).strip()
+    # Fallback: return as-is (already bare)
+    return addr.strip()
+
+
+def _forward(raw_bytes: bytes, from_addr: str, to_addr: str):
+    bare_from = _extract_email(from_addr)
+    bare_to   = _extract_email(to_addr)
     try:
         with smtplib.SMTP(MAIL_SERVER_HOST, MAIL_SERVER_PORT, timeout=30) as s:
-            s.sendmail(from_addr, [to_addr], raw_bytes)
-        logger.info(f"Forwarded to {to_addr}")
+            s.sendmail(bare_from, [bare_to], raw_bytes)
+        logger.info(f"Forwarded  from={bare_from}  to={bare_to}")
+    except ConnectionRefusedError:
+        logger.warning(
+            f"Forward skipped — no downstream SMTP on "
+            f"{MAIL_SERVER_HOST}:{MAIL_SERVER_PORT}  "
+            f"(set MAIL_SERVER_PORT in environment to configure)"
+        )
     except Exception as exc:
         logger.error(f"Forwarding failed: {exc}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SMTP proxy
+# SMTP proxy  (non-blocking — analysis runs AFTER DATA phase completes)
 # ══════════════════════════════════════════════════════════════════════════════
+
 class SMTPHandler(asyncio.Protocol):
+    """
+    Minimal SMTP server.
+    The DATA phase immediately ACKs the client once "." is received,
+    then dispatches process_message() in a background thread so the
+    SMTP connection is never held open during sandbox analysis.
+    """
     def __init__(self):
-        self._buf   = b""
-        self._state = "INIT"
-        self._from  = ""
-        self._to    = []
-        self._data  = b""
+        self._buf      = b""
+        self._state    = "INIT"
+        self._from     = ""
+        self._to       = []
+        self._data     = b""
         self.transport = None
 
     def connection_made(self, transport):
         self.transport = transport
         self._send("220 mgw.company.com ESMTP MailFilter ready")
 
-    def data_received(self, data):
+    def data_received(self, data: bytes):
         self._buf += data
         while b"\r\n" in self._buf:
             line, self._buf = self._buf.split(b"\r\n", 1)
             self._handle(line.decode("utf-8", errors="replace"))
 
-    def _send(self, text):
+    def _send(self, text: str):
         self.transport.write((text + "\r\n").encode())
 
-    def _handle(self, line):
+    def _handle(self, line: str):
         upper = line.upper()
+
         if self._state == "DATA_BODY":
             if line == ".":
                 self._state = "DONE"
                 self._send("250 OK: queued")
-                try:
-                    process_message(self._data)
-                except Exception as exc:
-                    logger.error(f"Pipeline error: {exc}")
+                # ACK client FIRST, then analyse in background thread
+                raw_copy = bytes(self._data)
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(None, _safe_process, raw_copy)
             else:
                 self._data += (
                     (line[1:] if line.startswith(".") else line) + "\r\n"
                 ).encode()
             return
+
         if upper.startswith("EHLO") or upper.startswith("HELO"):
-            self._send(f"250-mgw.company.com\r\n250 OK")
+            self._send("250-mgw.company.com\r\n250 OK")
         elif upper.startswith("MAIL FROM"):
             self._from = line.split(":", 1)[1].strip().strip("<>")
             self._send("250 OK")
@@ -593,20 +680,32 @@ class SMTPHandler(asyncio.Protocol):
             self.transport.close()
         elif upper == "RSET":
             self._from = ""; self._to = []; self._data = b""
-            self._state = "INIT"; self._send("250 OK")
+            self._state = "INIT"
+            self._send("250 OK")
         else:
             self._send("500 Unrecognised command")
 
     def connection_lost(self, exc):
         if exc:
-            logger.debug(f"Connection error: {exc}")
+            logger.debug(f"Connection closed: {exc}")
+
+
+def _safe_process(raw_bytes: bytes):
+    """Wrapper so pipeline errors never crash the executor thread."""
+    try:
+        process_message(raw_bytes)
+    except Exception as exc:
+        logger.error(f"Pipeline error: {exc}", exc_info=True)
 
 
 async def run_server():
     loop   = asyncio.get_event_loop()
-    server = await loop.create_server(SMTPHandler, MGW_LISTEN_HOST, MGW_LISTEN_PORT)
+    server = await loop.create_server(
+        SMTPHandler, MGW_LISTEN_HOST, MGW_LISTEN_PORT
+    )
     logger.info(
-        f"MailFilter SMTP proxy listening on {MGW_LISTEN_HOST}:{MGW_LISTEN_PORT}"
+        f"MailFilter SMTP proxy listening on "
+        f"{MGW_LISTEN_HOST}:{MGW_LISTEN_PORT}"
     )
     async with server:
         await server.serve_forever()

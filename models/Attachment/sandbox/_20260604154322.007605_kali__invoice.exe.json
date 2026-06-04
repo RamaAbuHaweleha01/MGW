@@ -1,0 +1,19 @@
+{
+  "filename": "invoice.exe",
+  "extension": ".exe",
+  "platforms": [
+    "windows"
+  ],
+  "timestamp": "2026-06-04T19:48:24.568003+00:00",
+  "cape_verdicts": [
+    {
+      "platform": "windows",
+      "verdict": "timeout",
+      "risk_score": 0.5,
+      "task_id": 29
+    }
+  ],
+  "redirect_chain": [],
+  "verdict": "suspicious",
+  "risk_score": 0.5
+}

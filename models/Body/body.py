@@ -111,7 +111,8 @@ def _finetune_roberta(tok, model):
         logger.warning("No master dataset — RoBERTa stays as base model")
         return
 
-    df = pd.read_csv(master, low_memory=False)
+    pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')
+
     if "label" not in df.columns:
         return
     text_col = next((c for c in ["body","text","subject","message"]
@@ -191,7 +192,7 @@ def _load_tfidf():
     if not master.exists():
         return None
 
-    df = pd.read_csv(master, low_memory=False)
+    pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')
     text_col = next((c for c in ["body","text","subject"] if c in df.columns), None)
     if not text_col or "label" not in df.columns:
         return None
@@ -233,7 +234,7 @@ def _load_subject_tfidf():
     if not master.exists():
         return None
 
-    df = pd.read_csv(master, low_memory=False)
+     pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')
     if "label" not in df.columns:
         return None
     subj_col = next((c for c in ["subject","Subject"] if c in df.columns), None)

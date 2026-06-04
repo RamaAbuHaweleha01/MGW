@@ -1,0 +1,35 @@
+{
+  "message_id": "<20260604040045.002634@kali>",
+  "filename": "attachment.bin",
+  "extension": ".bin",
+  "platforms": [
+    "linux"
+  ],
+  "timestamp": "2026-06-04T08:01:37.243155+00:00",
+  "cape_verdicts": [
+    {
+      "verdict": "clean",
+      "risk_score": 0.0,
+      "malscore": 0.0,
+      "behaviors": [],
+      "behavior_risk": 0.0,
+      "machine": "CAPE_WIN",
+      "platform": "linux",
+      "duration": 43,
+      "task_id": 18,
+      "signatures": [],
+      "network": {
+        "hosts": [
+          "135.233.95.144",
+          "199.232.214.172"
+        ],
+        "domains": []
+      },
+      "dropped_files": 0,
+      "processes": []
+    }
+  ],
+  "redirect_chain": [],
+  "verdict": "clean",
+  "risk_score": 0.0
+}

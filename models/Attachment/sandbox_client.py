@@ -5,28 +5,27 @@ CAPEv2-integrated sandbox client.
 
 Submits attachments directly to the LOCAL CAPEv2 REST API on MGW (127.0.0.1:8000).
 CAPE master routes to CAPE_Linux or CAPE_WIN automatically via platform= tag.
-Saves per-attachment analysis detail to ~/MGW/Attachment/<timestamp>_<filename>.json
+Saves per-attachment analysis detail to ~/MGW/models/Attachment/sandbox/<msg_id>_<filename>.json
 """
 from __future__ import annotations
-import os, sys, json, logging, base64, re, time, tempfile, pathlib, urllib.request, urllib.error
+import os, sys, json, logging, re, time, urllib.request, urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 MGW_ROOT       = Path.home() / "MGW"
-SANDBOX_DIR    = MGW_ROOT / "models" / "Attachment
-ATTACHMENT_DIR = MGW_ROOT / "Attachment"
-LOG_FILE       = SANDBOX_DIR / "sandbox_client.log"
+# FIX: was missing closing quote → "Attachment  (syntax error)
+SANDBOX_DIR    = MGW_ROOT / "models" / "Attachment" / "sandbox"
+LOG_FILE       = MGW_ROOT / "models" / "Attachment" / "sandbox_client.log"
 
 SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
-ATTACHMENT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─── CAPEv2 local API ────────────────────────────────────────────────────────
-CAPE_API  = os.environ.get("CAPE_API", "http://127.0.0.1:8000")
+CAPE_API  = os.environ.get("CAPE_API",     "http://127.0.0.1:8000")
 TIMEOUT   = int(os.environ.get("CAPE_TIMEOUT", "300"))   # max wait for report
 POLL_INT  = int(os.environ.get("CAPE_POLL",    "10"))    # polling interval
 
-# ─── Extension → platform routing ────────────────────────────────────────────
+# ─── Extension → platform routing ─────────────────────────────────────────────
 WIN_ONLY_EXTS = {".exe", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".lnk"}
 LIN_ONLY_EXTS = {".sh",  ".elf", ".run", ".deb", ".rpm", ".bin"}
 BOTH_EXTS     = {
@@ -52,7 +51,7 @@ BEHAVIOR_RISK_SCORES = {
     "persistence":                0.80,
 }
 
-# ─── Logging ─────────────────────────────────────────────────────────────────
+# ─── Logging ──────────────────────────────────────────────────────────────────
 logger = logging.getLogger("sandbox_client")
 if not logger.handlers:
     h = logging.FileHandler(LOG_FILE)
@@ -65,6 +64,7 @@ if not logger.handlers:
 # Helpers
 # ═════════════════════════════════════════════════════════════════════════════
 def _get_platforms(filename: str) -> list[str]:
+    """Derive target platform(s) from file extension — never hardcoded."""
     ext = os.path.splitext(filename.lower())[1]
     if ext in WIN_ONLY_EXTS:  return ["windows"]
     if ext in LIN_ONLY_EXTS:  return ["linux"]
@@ -78,8 +78,6 @@ def _cape_post(path: str, data: dict | None = None,
     url = f"{CAPE_API}{path}"
     try:
         if files:
-            # multipart/form-data via temp file approach
-            import urllib.request, io, mimetypes
             boundary = "---CAPEBoundary7f3d9a"
             body = b""
             for field, value in (data or {}).items():
@@ -91,13 +89,15 @@ def _cape_post(path: str, data: dict | None = None,
             for field, (fname, fbytes) in files.items():
                 body += (
                     f"--{boundary}\r\n"
-                    f'Content-Disposition: form-data; name="{field}"; filename="{fname}"\r\n'
+                    f'Content-Disposition: form-data; name="{field}"; '
+                    f'filename="{fname}"\r\n'
                     f"Content-Type: application/octet-stream\r\n\r\n"
                 ).encode() + fbytes + b"\r\n"
             body += f"--{boundary}--\r\n".encode()
             req = urllib.request.Request(
                 url, data=body,
-                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                headers={"Content-Type":
+                         f"multipart/form-data; boundary={boundary}"},
             )
         else:
             req = urllib.request.Request(
@@ -112,18 +112,31 @@ def _cape_post(path: str, data: dict | None = None,
         return None
 
 
+def _cape_get(path: str) -> dict | None:
+    url = f"{CAPE_API}{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as exc:
+        logger.warning(f"CAPE GET {path} failed: {exc}")
+        return None
+
+
 def _submit_task(filename: str, payload_bytes: bytes, platform: str) -> int | None:
-    """Submit file to CAPEv2 API. Returns task_id or None."""
+    """Submit file binary to CAPEv2 API. Returns task_id or None."""
     result = _cape_post(
         "/apiv2/tasks/create/file/",
         data={"platform": platform, "timeout": 120, "enforce_timeout": "true"},
+        # FIX (original issue): payload_bytes is the real decoded binary,
+        # not a filename string — this is correct as long as mail_filter
+        # calls part.get_payload(decode=True) before passing bytes here.
         files={"file": (filename, payload_bytes)},
     )
     if not result:
         return None
     tid = (result.get("data") or {}).get("task_ids", [None])[0] \
           or (result.get("data") or {}).get("task_id")
-    logger.info(f"Submitted {filename} ({platform}) → task_id={tid}")
+    logger.info(f"Submitted '{filename}' ({platform}) -> task_id={tid}")
     return tid
 
 
@@ -133,8 +146,7 @@ def _wait_for_report(task_id: int) -> dict | None:
     while time.time() < deadline:
         time.sleep(POLL_INT)
         try:
-            st = _cape_post.__func__ if False else None  # dummy
-            r = _cape_get(f"/apiv2/tasks/status/{task_id}/")
+            r      = _cape_get(f"/apiv2/tasks/status/{task_id}/")
             status = (r.get("data") if r else None)
             logger.info(f"Task {task_id} status: {status}")
             if status == "reported":
@@ -146,16 +158,6 @@ def _wait_for_report(task_id: int) -> dict | None:
             logger.warning(f"Poll error task {task_id}: {exc}")
     logger.error(f"Task {task_id} timed out after {TIMEOUT}s")
     return None
-
-
-def _cape_get(path: str) -> dict | None:
-    url = f"{CAPE_API}{path}"
-    try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            return json.loads(resp.read().decode())
-    except Exception as exc:
-        logger.warning(f"CAPE GET {path} failed: {exc}")
-        return None
 
 
 def _parse_report(raw: dict) -> dict:
@@ -195,8 +197,10 @@ def _parse_report(raw: dict) -> dict:
         "signatures":    [{"name": s.get("name"), "severity": s.get("severity")}
                           for s in sigs[:10]],
         "network": {
-            "hosts":   [h.get("ip")   for h in report.get("network", {}).get("hosts",   [])[:10]],
-            "domains": [d.get("domain") for d in report.get("network", {}).get("domains", [])[:10]],
+            "hosts":   [h.get("ip")     for h in
+                        report.get("network", {}).get("hosts",   [])[:10]],
+            "domains": [d.get("domain") for d in
+                        report.get("network", {}).get("domains", [])[:10]],
         },
         "dropped_files": len(report.get("dropped", [])),
         "processes":     [p.get("process_name") for p in
@@ -205,7 +209,7 @@ def _parse_report(raw: dict) -> dict:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Redirect chain investigation (kept from original)
+# Redirect chain investigation
 # ═════════════════════════════════════════════════════════════════════════════
 def investigate_redirect(url: str, max_hops: int = 10) -> dict:
     BAD_TLDS   = {".tk",".ml",".ga",".cf",".gq",".xyz",".top",
@@ -265,11 +269,15 @@ def investigate_redirect(url: str, max_hops: int = 10) -> dict:
 # ═════════════════════════════════════════════════════════════════════════════
 # Attachment log saver
 # ═════════════════════════════════════════════════════════════════════════════
-def _save_attachment_log(filename: str, analysis: dict) -> str:
-    """Save detailed analysis JSON to ~/MGW/Attachment/. Returns saved path."""
-    ts      = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    safe    = re.sub(r'[^\w.\-]', '_', filename)[:60]
-    outpath = ATTACHMENT_DIR / f"{ts}_{safe}.json"
+def _save_attachment_log(message_id: str, filename: str, analysis: dict) -> str:
+    """
+    Save detailed analysis JSON.
+    Path: ~/MGW/models/Attachment/sandbox/<safe_msg_id>_<safe_filename>.json
+    Returns the saved path string.
+    """
+    safe_mid  = re.sub(r'[^\w.\-]', '_', message_id)[:50]
+    safe_name = re.sub(r'[^\w.\-]', '_', filename)[:60]
+    outpath   = SANDBOX_DIR / f"{safe_mid}_{safe_name}.json"
     try:
         outpath.write_text(json.dumps(analysis, indent=2, default=str))
         logger.info(f"Attachment log saved: {outpath}")
@@ -281,21 +289,31 @@ def _save_attachment_log(filename: str, analysis: dict) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 # Main public interface
 # ═════════════════════════════════════════════════════════════════════════════
-def analyze_attachment(filename: str, payload_bytes: bytes) -> dict:
+def analyze_attachment(filename: str, payload_bytes: bytes,
+                       message_id: str = "unknown") -> dict:
     """
     Full pipeline:
-      1. Classify attachment → platforms
-      2. Submit to CAPEv2 API for each platform
+      1. Derive platform(s) from extension  — never hardcoded
+      2. Submit real binary bytes to CAPEv2 for each platform
       3. Poll until reported
       4. Parse report
       5. Investigate redirect chains for web/link files
-      6. Save detailed log to ~/MGW/Attachment/
+      6. Save detailed log
       7. Return aggregate result to mail_filter
+
+    Parameters
+    ----------
+    filename      : original attachment filename (used for ext routing + logging)
+    payload_bytes : decoded binary content from part.get_payload(decode=True)
+    message_id    : email Message-ID for log file naming
     """
     ext       = os.path.splitext(filename.lower())[1]
     platforms = _get_platforms(filename)
 
-    logger.info(f"Analyzing: {filename}  ext={ext}  platforms={platforms}")
+    logger.info(
+        f"Analyzing: {filename}  ext={ext}  platforms={platforms}  "
+        f"message_id={message_id}"
+    )
 
     cape_verdicts    = []
     redirect_results = []
@@ -318,7 +336,7 @@ def analyze_attachment(filename: str, payload_bytes: bytes) -> dict:
             })
             continue
 
-        parsed = _parse_report(raw_report)
+        parsed             = _parse_report(raw_report)
         parsed["platform"] = platform
         cape_verdicts.append(parsed)
         logger.info(
@@ -342,12 +360,12 @@ def analyze_attachment(filename: str, payload_bytes: bytes) -> dict:
             logger.warning(f"Redirect investigation error: {exc}")
 
     # ── Aggregate ─────────────────────────────────────────────────────────────
-    all_risks = [v.get("risk_score", 0) for v in cape_verdicts]
+    all_risks      = [v.get("risk_score", 0) for v in cape_verdicts]
     if redirect_results:
         all_risks += [r.get("risk_score", 0) for r in redirect_results]
 
-    max_risk      = max(all_risks) if all_risks else 0.40
-    any_malicious = any(v.get("verdict") == "malicious" for v in cape_verdicts)
+    max_risk       = max(all_risks) if all_risks else 0.40
+    any_malicious  = any(v.get("verdict") == "malicious"  for v in cape_verdicts)
     any_suspicious = any(v.get("verdict") == "suspicious" for v in cape_verdicts)
 
     final_verdict = (
@@ -367,8 +385,7 @@ def analyze_attachment(filename: str, payload_bytes: bytes) -> dict:
         "risk_score":     round(max_risk, 6),
     }
 
-    # ── Save detailed log ─────────────────────────────────────────────────────
-    log_path = _save_attachment_log(filename, analysis)
+    log_path          = _save_attachment_log(message_id, filename, analysis)
     analysis["log_path"] = log_path
 
     logger.info(
@@ -382,26 +399,27 @@ def analyze_attachment(filename: str, payload_bytes: bytes) -> dict:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="CAPEv2 attachment analyser")
-    ap.add_argument("file", nargs="?", help="Path to attachment file")
-    ap.add_argument("--status", action="store_true", help="Show CAPE machine status")
+    ap.add_argument("file",     nargs="?", help="Path to attachment file")
+    ap.add_argument("--status", action="store_true",
+                    help="Show CAPE machine status")
     args = ap.parse_args()
 
     if args.status:
-        r = _cape_get("/apiv2/machines/list/")
+        r        = _cape_get("/apiv2/machines/list/")
         machines = (r.get("data") or []) if r else []
         print("=== CAPE Machines ===")
         for m in machines:
-            print(f"  {m['name']:15} platform={m['platform']:8} status={m['status']}")
+            print(f"  {m['name']:15} platform={m['platform']:8} "
+                  f"status={m['status']}")
         sys.exit(0)
 
     if not args.file:
-        ap.print_help()
-        sys.exit(1)
+        ap.print_help(); sys.exit(1)
 
     fpath = Path(args.file)
     if not fpath.exists():
-        print(f"File not found: {fpath}", file=sys.stderr)
-        sys.exit(1)
+        print(f"File not found: {fpath}", file=sys.stderr); sys.exit(1)
 
-    result = analyze_attachment(fpath.name, fpath.read_bytes())
+    result = analyze_attachment(fpath.name, fpath.read_bytes(),
+                                message_id="cli-test")
     print(json.dumps(result, indent=2, default=str))

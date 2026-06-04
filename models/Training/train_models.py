@@ -142,7 +142,7 @@ def load_datasets() -> pd.DataFrame:
     dfs = []
     for f in csvs:
         try:
-            df = pd.read_csv(f, low_memory=False)
+            df = pd.read_csv(f)
             logger.info(f"Loaded {f.name}: {len(df)} rows")
             dfs.append(df)
         except Exception as e:
