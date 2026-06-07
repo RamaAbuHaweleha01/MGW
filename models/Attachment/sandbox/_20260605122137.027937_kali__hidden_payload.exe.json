@@ -1,0 +1,34 @@
+{
+  "filename": "hidden_payload.exe",
+  "extension": ".exe",
+  "platforms": [
+    "windows"
+  ],
+  "timestamp": "2026-06-05T16:22:37.168285+00:00",
+  "cape_verdicts": [
+    {
+      "verdict": "malicious",
+      "risk_score": 1.0,
+      "malscore": 10.0,
+      "behaviors": [],
+      "behavior_risk": 0.0,
+      "machine": "CAPE_WIN",
+      "platform": "windows",
+      "duration": 53,
+      "task_id": 32,
+      "signatures": [],
+      "network": {
+        "hosts": [
+          "135.233.95.144",
+          "199.232.214.172"
+        ],
+        "domains": []
+      },
+      "dropped_files": 0,
+      "processes": []
+    }
+  ],
+  "redirect_chain": [],
+  "verdict": "malicious",
+  "risk_score": 1.0
+}

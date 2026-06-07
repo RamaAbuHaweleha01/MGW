@@ -1,0 +1,23 @@
+Date: Fri, 05 Jun 2026 12:37:14 -0400
+To: mailnet1@company.com
+From: security@company.com
+Subject: Urgent: Executive Invoice
+Message-Id: <20260605123714.035637@kali>
+X-Mailer: swaks v20240103.0 jetmore.org/john/code/swaks/
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_MIME_BOUNDARY_000_35637"
+
+------=_MIME_BOUNDARY_000_35637
+Content-Type: text/plain
+
+Please find the attached invoice for this month's clearance.
+------=_MIME_BOUNDARY_000_35637
+Content-Type: application/octet-stream
+Content-Disposition: attachment
+Content-Transfer-Encoding: BASE64
+
+Li9pbnZvaWNlLmV4ZQ==
+
+------=_MIME_BOUNDARY_000_35637--
+
+

