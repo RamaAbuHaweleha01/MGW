@@ -125,7 +125,9 @@ def _load_or_train_xgb():
     dfs = []
     for c in csvs:
         try:
-           pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')
+           df_temp = pd.read_csv(c, engine='python', on_bad_lines='skip', encoding_errors='replace')
+            if df_temp is not None and len(df_temp) > 0:
+            dfs.append(df_temp)
         except Exception as e:
             logger.warning(f"Cannot read {c.name}: {e}")
     if not dfs:

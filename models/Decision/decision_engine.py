@@ -13,9 +13,13 @@ Scale contract (ALL internal values 0.0 – 1.0):
   - composite_score_10      → 0.0–10.0  (× 10, display only)
 
 Decision thresholds (0.0–1.0 space):
-  DROP    : composite_01 ≥ 0.75   OR  any hard-DROP rule fires
-  PEND    : composite_01 0.45–0.74  OR  any PEND rule fires
+  DROP    : composite_01 ≥ 0.45   OR  any rule fires
   DELIVER : composite_01 < 0.45   AND  no rules fired
+
+  PEND has been removed.  All uncertainty resolves to DROP (fail-closed).
+  The three contributing models are header, body, and attachment/sandbox.
+  If any model result is unavailable it defaults to 0.5 (suspicious-neutral)
+  rather than crashing.
 """
 from __future__ import annotations
 import json, logging, os
@@ -27,15 +31,11 @@ logger = logging.getLogger("decision_engine")
 # ═══════════════════════════════════════════════════════════════════════════
 # ALL thresholds in 0.0–1.0 space
 # ═══════════════════════════════════════════════════════════════════════════
-T_DROP         = 0.75    # composite ≥ this → DROP    (≡ 7.5/10)
-T_PEND_HI      = 0.749   # composite ≤ this (upper PEND boundary)
-T_PEND_LO      = 0.45    # composite ≥ this → PEND    (≡ 4.5/10)
+T_DROP         = 0.45    # composite ≥ this → DROP    (≡ 4.5/10)
 T_DELIVER      = 0.45    # composite < this → DELIVER (≡ 4.5/10)
 
 # CAPE malscore thresholds — CAPE returns 0–10, we normalise ÷ 10
-# so 7.0 → 0.70, 4.0 → 0.40
-T_CAPE_DROP    = 0.70    # normalised CAPE malscore  (≡ 7.0/10)
-T_CAPE_PEND    = 0.40    # normalised CAPE malscore  (≡ 4.0/10)
+T_CAPE_DROP    = 0.40    # normalised CAPE malscore ≥ this → DROP (≡ 4.0/10)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Adaptive signal weights  (all signals are 0.0–1.0, weights are multipliers)
@@ -153,12 +153,15 @@ def _extract_signals(semantic_meta, header_result, body_result, attach_result) -
       - cape_behavior_risk : already 0-1 (from sandbox_client._parse_report)
       - keyword counts     : clamped ratios
     """
-    s = semantic_meta
-    h = header_result
-    b = body_result
-    a = attach_result
+    # Null-guard: any model that failed returns an empty dict so downstream
+    # .get() calls don't raise AttributeError on NoneType.
+    s = semantic_meta  or {}
+    h = header_result  or {}
+    b = body_result    or {}
+    a = attach_result  or {}
 
-    # Model outputs — already 0-1
+    # Model outputs — already 0-1; default to 0.5 (suspicious-neutral) when
+    # a model result is missing so the score is not artificially lowered.
     h_risk = float(h.get("risk_probability", 0.5))
     b_risk = float(b.get("risk_probability", 0.5))
 
@@ -351,11 +354,14 @@ def _evaluate_rules(signals, composite_01, semantic_meta,
     Model thresholds: direct risk_probability comparison (already 0-1).
     """
     drop_reasons = []
-    pend_reasons = []
+
+    # Null-guard: use empty dict if a model result is None
+    _h = header_result or {}
+    _b = body_result   or {}
 
     # h_risk, b_risk already 0-1 from model outputs
-    h_risk = float(header_result.get("risk_probability", 0.5))
-    b_risk = float(body_result.get("risk_probability",   0.5))
+    h_risk = float(_h.get("risk_probability", 0.5))
+    b_risk = float(_b.get("risk_probability", 0.5))
 
     # cape_malscore_norm already 0-1 (normalised in _extract_signals)
     cape_01 = float(signals.get("cape_malscore_norm", 0.0))
@@ -430,115 +436,110 @@ def _evaluate_rules(signals, composite_01, semantic_meta,
         drop_reasons.append(
             f"R-D12: {semantic_meta.get('url_mismatch_count')} URL anchor mismatches")
 
-    # ── HARD PEND RULES ──────────────────────────────────────────────────
-    # R-P01: CAPE malscore in suspicious range (0.40–0.70)
-    if T_CAPE_PEND < cape_01 <= T_CAPE_DROP:
-        pend_reasons.append(
-            f"R-P01: CAPE malscore {cape_01*10:.1f}/10 in suspicious range (4.0–7.0)")
+    # ── ADDITIONAL DROP RULES (formerly PEND — now fail-closed) ─────────
+    # Note: PEND has been removed.  Any indicator of suspicion → DROP.
 
-    # R-P02: Body high, header clean
+    # R-D13: CAPE malscore ≥ 0.40 (≡ 4.0/10) — was R-P01
+    if cape_01 >= T_CAPE_DROP:
+        drop_reasons.append(
+            f"R-D13: CAPE malscore {cape_01*10:.1f}/10 ≥ 4.0 — sandbox flagged")
+
+    # R-D14: Body high risk, header clean — possible social engineering
     if b_risk > 0.70 and h_risk < 0.35:
-        pend_reasons.append(
-            f"R-P02: Body malicious ({b_risk:.3f}) but header clean ({h_risk:.3f})")
+        drop_reasons.append(
+            f"R-D14: Body risk high ({b_risk:.3f}) but header clean ({h_risk:.3f})")
 
-    # R-P03: Header high, body clean
+    # R-D15: Header high risk, body clean
     if h_risk > 0.70 and b_risk < 0.35:
-        pend_reasons.append(
-            f"R-P03: Header suspicious ({h_risk:.3f}) but body clean ({b_risk:.3f})")
+        drop_reasons.append(
+            f"R-D15: Header risk high ({h_risk:.3f}) but body clean ({b_risk:.3f})")
 
-    # R-P04: Executable + no authentication at all
+    # R-D16: Executable attachment from sender with no email auth
+    _sm = semantic_meta or {}
     if (signals.get("attachment_win_executable", 0) > 0 and
             signals.get("spf_fail",  0) == 0 and
             signals.get("dkim_fail", 0) == 0 and
-            int(semantic_meta.get("has_dkim", 0)) == 0):
-        pend_reasons.append(
-            "R-P04: Executable attachment from sender with no email auth")
+            int(_sm.get("has_dkim", 0)) == 0):
+        drop_reasons.append(
+            "R-D16: Executable attachment + no SPF/DKIM auth")
 
-    # R-P05: Office macro + any auth failure
+    # R-D17: Office macro + any auth failure
     if signals.get("attachment_office_macro", 0) > 0 and (
             signals.get("spf_fail", 0) > 0 or signals.get("dkim_fail", 0) > 0):
-        pend_reasons.append(
-            "R-P05: Office macro attachment + auth failure")
+        drop_reasons.append("R-D17: Office macro attachment + auth failure")
 
-    # R-P06: Archive + high body risk (> 0.65)
+    # R-D18: Archive + high body risk
     if signals.get("attachment_archive", 0) > 0 and b_risk > 0.65:
-        pend_reasons.append(
-            f"R-P06: Archive attachment + high body risk ({b_risk:.3f})")
+        drop_reasons.append(
+            f"R-D18: Archive attachment + high body risk ({b_risk:.3f})")
 
-    # R-P07: Future date + domain mismatch
-    if signals.get("date_is_future",   0) > 0 and \
-       signals.get("domain_mismatch",  0) > 0:
-        pend_reasons.append("R-P07: Future timestamp + domain mismatch")
+    # R-D19: Future date + domain mismatch
+    if signals.get("date_is_future", 0) > 0 and signals.get("domain_mismatch", 0) > 0:
+        drop_reasons.append("R-D19: Future timestamp + domain mismatch")
 
-    # R-P08: iframe + form
+    # R-D20: <iframe> + <form> in email body
     if signals.get("has_iframe", 0) > 0 and signals.get("has_form", 0) > 0:
-        pend_reasons.append("R-P08: <iframe> + <form> in email body")
+        drop_reasons.append("R-D20: <iframe> + <form> in email body")
 
-    # R-P09: Urgency + fear + keyword density
-    if (float(semantic_meta.get("urgency_score",            0)) > 0.60 and
-            float(semantic_meta.get("fear_score",           0)) > 0.60 and
-            int(semantic_meta.get("unique_phishing_keywords",0)) >= 5):
-        pend_reasons.append(
-            "R-P09: High urgency + fear + 5+ phishing keywords")
+    # R-D21: High urgency + fear + keyword density
+    if (float(_sm.get("urgency_score",            0)) > 0.60 and
+            float(_sm.get("fear_score",           0)) > 0.60 and
+            int(_sm.get("unique_phishing_keywords",0)) >= 5):
+        drop_reasons.append("R-D21: High urgency + fear + 5+ phishing keywords")
 
-    # R-P10: IP URL + no Message-ID
-    if signals.get("url_has_ip",       0) > 0 and \
-       int(semantic_meta.get("has_message_id", 1)) == 0:
-        pend_reasons.append(
-            "R-P10: IP-based URL + missing Message-ID (bulk tool)")
+    # R-D22: IP URL + no Message-ID
+    if signals.get("url_has_ip", 0) > 0 and int(_sm.get("has_message_id", 1)) == 0:
+        drop_reasons.append("R-D22: IP-based URL + missing Message-ID")
 
-    # R-P11: Sandbox contacted external hosts
+    # R-D23: Sandbox attachment contacted external hosts
     if signals.get("cape_network_contact", 0) > 0:
-        pend_reasons.append(
-            "R-P11: Sandbox attachment contacted external hosts")
+        drop_reasons.append("R-D23: Sandbox attachment contacted external hosts")
 
-    # R-P12: Script attachment
+    # R-D24: Script attachment (.js/.vbs/.ps1/.hta)
     if signals.get("attachment_script", 0) > 0:
-        pend_reasons.append(
-            "R-P12: Script file attachment (.js/.vbs/.ps1/.hta)")
+        drop_reasons.append("R-D24: Script file attachment (.js/.vbs/.ps1/.hta)")
 
-    # R-P13: Suspicious TLD + urgency
-    if (signals.get("suspicious_tld_sender",      0) > 0 and
-            float(semantic_meta.get("urgency_score", 0)) > 0.40):
-        pend_reasons.append(
-            "R-P13: Suspicious sender TLD + urgency language")
+    # R-D25: Suspicious sender TLD + urgency language
+    if (signals.get("suspicious_tld_sender", 0) > 0 and
+            float(_sm.get("urgency_score", 0)) > 0.40):
+        drop_reasons.append("R-D25: Suspicious sender TLD + urgency language")
 
-    # R-P14: Excessive routing hops
+    # R-D26: Excessive routing hops
     if signals.get("excessive_received_hops", 0) > 0:
-        pend_reasons.append(
-            f"R-P14: Excessive routing hops ({semantic_meta.get('received_hops', 0)})")
+        drop_reasons.append(
+            f"R-D26: Excessive routing hops ({_sm.get('received_hops', 0)})")
 
-    # R-P15: Linux sandbox suspicious range
-    cape_linux_01 = 0.0
-    for att in attach_result.get("attachments", []):
+    # R-D27: Linux ELF/sandbox suspicious malscore
+    _at = attach_result or {}
+    for att in _at.get("attachments", []):
         for cv in att.get("cape_verdicts", []):
             if cv.get("platform") == "linux":
-                # CAPE malscore 0-10 → normalise to 0-1
-                cape_linux_01 = max(
-                    cape_linux_01,
-                    min(float(cv.get("malscore", 0)) / 10.0, 1.0)
-                )
-    if T_CAPE_PEND < cape_linux_01 <= T_CAPE_DROP:
-        pend_reasons.append(
-            f"R-P15: Linux sandbox malscore {cape_linux_01*10:.1f}/10 in suspicious range")
+                cape_linux_01 = min(float(cv.get("malscore", 0)) / 10.0, 1.0)
+                if cape_linux_01 >= T_CAPE_DROP:
+                    drop_reasons.append(
+                        f"R-D27: Linux sandbox malscore {cape_linux_01*10:.1f}/10 ≥ 4.0")
+
+    # R-D28: Linux executable attachment
+    if signals.get("attachment_linux_exec", 0) > 0:
+        drop_reasons.append("R-D28: Linux executable attachment (.elf/.sh/.bin)")
 
     # ── Compile ──────────────────────────────────────────────────────────
-    all_rules = drop_reasons + pend_reasons
     if drop_reasons:
-        return all_rules, "DROP"
-    if pend_reasons:
-        return all_rules, "PEND"
-    return all_rules, None
+        return drop_reasons, "DROP"
+    return [], None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Contradiction detector  — compares 0-1 values directly
 # ═══════════════════════════════════════════════════════════════════════════
 def _detect_contradiction(header_result, body_result, attach_result) -> dict:
-    h_risk  = float(header_result.get("risk_probability", 0.5))
-    b_risk  = float(body_result.get("risk_probability",   0.5))
-    a_risk  = float(attach_result.get("risk_probability", 0.0))
-    has_att = attach_result.get("has_attachments", 0)
+    _h = header_result or {}
+    _b = body_result   or {}
+    _a = attach_result or {}
+    h_risk  = float(_h.get("risk_probability", 0.5))
+    b_risk  = float(_b.get("risk_probability", 0.5))
+    a_risk  = float(_a.get("risk_probability", 0.0))
+    has_att = _a.get("has_attachments", 0)
 
     contradictions = []
     gap = abs(h_risk - b_risk)
@@ -591,7 +592,8 @@ def _calculate_confidence(composite_01, rules, contradiction) -> str:
         return "HIGH"
     if (composite_01 >= T_DROP or composite_01 < 0.30) and len(rules) >= 1:
         return "HIGH"
-    if abs(composite_01 - T_PEND_LO) < 0.05 or abs(composite_01 - T_DROP) < 0.05:
+    # Score sitting right on the decision boundary → less certain
+    if abs(composite_01 - T_DROP) < 0.05:
         return "LOW"
     return "MEDIUM"
 
@@ -605,6 +607,9 @@ def decide(semantic_meta, header_result, body_result, attach_result) -> Decision
 
     All inputs use 0.0–1.0 risk_probability values.
     Composite score is computed internally in 0-1, reported in both scales.
+
+    Returns DecisionResult with action = "DROP" or "DELIVER" only.
+    Any None model result is treated as 0.5 (suspicious-neutral) — no crash.
     """
     # 1. Extract normalised signals (all 0-1)
     signals = _extract_signals(semantic_meta, header_result,
@@ -622,27 +627,19 @@ def decide(semantic_meta, header_result, body_result, attach_result) -> Decision
     # 4. Contradiction detection (0-1 comparisons)
     contradiction = _detect_contradiction(header_result, body_result, attach_result)
 
-    # 5. Final arbiter
-    if forced_action == "DROP":
+    # 5. Final arbiter — DROP or DELIVER only (no PEND)
+    if forced_action == "DROP" or composite_01 >= T_DROP:
         action = "DROP"
-    elif forced_action == "PEND":
-        action = "DROP" if composite_01 >= T_DROP else "PEND"
     else:
-        # Score-only path
-        if composite_01 >= T_DROP:
+        # Below threshold — check for high-severity model contradiction
+        if (contradiction["has_contradiction"] and
+                any(c["severity"] == "HIGH" for c in contradiction["details"])):
             action = "DROP"
-        elif composite_01 >= T_PEND_LO:
-            action = "PEND"
+            triggered_rules.append(
+                "R-C01: High-severity model contradiction → DROP (fail-closed)"
+            )
         else:
-            # Below PEND — check for high-severity contradiction
-            if (contradiction["has_contradiction"] and
-                    any(c["severity"] == "HIGH" for c in contradiction["details"])):
-                action = "PEND"
-                triggered_rules.append(
-                    "R-C01: High-severity model contradiction → escalated to PEND"
-                )
-            else:
-                action = "DELIVER"
+            action = "DELIVER"
 
     # 6. Confidence
     confidence = _calculate_confidence(composite_01, triggered_rules, contradiction)
@@ -670,4 +667,3 @@ def decide(semantic_meta, header_result, body_result, attach_result) -> Decision
         contradiction      = contradiction,
         explanation        = explanation,
     )
-

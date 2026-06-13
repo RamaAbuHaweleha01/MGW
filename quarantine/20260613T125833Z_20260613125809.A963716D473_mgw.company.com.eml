@@ -1,0 +1,17 @@
+Received: by mgw.company.com (Postfix, from userid 0)
+	id A963716D473; Sat, 13 Jun 2026 12:58:09 +0000 (UTC)
+From: root@company.com (Cron Daemon)
+To: root@company.com
+Subject: Cron <root@mgw>    test -x /etc/cron.daily/popularity-contest && /etc/cron.daily/popularity-contest --crond
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Cron-Env: <SHELL=/bin/sh>
+X-Cron-Env: <PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin>
+X-Cron-Env: <HOME=/root>
+X-Cron-Env: <LOGNAME=root>
+Message-Id: <20260613125809.A963716D473@mgw.company.com>
+Date: Sat, 13 Jun 2026 12:58:09 +0000 (UTC)
+Content-Transfer-Encoding: quoted-printable
+
+/etc/cron.daily/popularity-contest: 52: .: Can't open /etc/popularity-con=
+test.conf

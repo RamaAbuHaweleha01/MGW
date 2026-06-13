@@ -1,0 +1,16 @@
+{
+  "action": "PEND",
+  "composite_score": 5.0,
+  "confidence": "LOW",
+  "triggered_rules": [
+    "Decision engine error: 'NoneType' object has no attribute '__dict__'"
+  ],
+  "score_breakdown": {},
+  "contradiction": {
+    "has_contradiction": false,
+    "count": 0,
+    "details": []
+  },
+  "explanation": "Decision engine error \u2014 defaulting to PEND: 'NoneType' object has no attribute '__dict__'",
+  "timestamp": "2026-06-13T07:00:16.685378"
+}

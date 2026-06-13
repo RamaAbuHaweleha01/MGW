@@ -234,7 +234,7 @@ def _load_subject_tfidf():
     if not master.exists():
         return None
 
-     pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')
+    df = pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')  # Fixed indentation
     if "label" not in df.columns:
         return None
     subj_col = next((c for c in ["subject","Subject"] if c in df.columns), None)
