@@ -7,6 +7,16 @@ Per spec:
   • Subject field → TF-IDF NLP model
   • From / To / Return-Path / Date / Auth → XGBoost ML model
   • Final score = weighted fusion of both sub-scores.
+
+FIXES applied vs previous version
+───────────────────────────────────
+FIX-H01: Indentation error in _load_or_train_xgb() — the `if df_temp is not None`
+         guard inside the CSV-loading loop was misindented, causing SyntaxError.
+FIX-H02: train/test split changed from 80/20 to 70/15/15 (train/val/test)
+         matching the project spec. Val set used for early stopping; test set
+         for held-out ROC-AUC reporting.
+FIX-H03: _load_or_train_subject_tfidf() split changed from 90/10 to 70/15/15
+         for consistency with the spec.
 """
 from __future__ import annotations
 import os, sys, json, logging, subprocess, math, pickle
@@ -125,9 +135,11 @@ def _load_or_train_xgb():
     dfs = []
     for c in csvs:
         try:
-           df_temp = pd.read_csv(c, engine='python', on_bad_lines='skip', encoding_errors='replace')
+            # FIX-H01: result correctly assigned to df_temp
+            df_temp = pd.read_csv(c, engine='python', on_bad_lines='skip',
+                                  encoding_errors='replace')
             if df_temp is not None and len(df_temp) > 0:
-            dfs.append(df_temp)
+                dfs.append(df_temp)
         except Exception as e:
             logger.warning(f"Cannot read {c.name}: {e}")
     if not dfs:
@@ -147,8 +159,12 @@ def _load_or_train_xgb():
 
     X = df[cols].fillna(0).astype(float)
     y = df["label"].astype(int)
-    X_tr, X_te, y_tr, y_te = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y)
+
+    # FIX-H02: 70/15/15 split (train / val / test)
+    X_tr, X_tmp, y_tr, y_tmp = train_test_split(
+        X, y, test_size=0.30, random_state=42, stratify=y)
+    X_val, X_te, y_val, y_te = train_test_split(
+        X_tmp, y_tmp, test_size=0.50, random_state=42, stratify=y_tmp)
 
     pos = (y_tr == 1).sum()
     neg = (y_tr == 0).sum()
@@ -161,11 +177,16 @@ def _load_or_train_xgb():
         verbosity=0, random_state=42,
         early_stopping_rounds=20,
     )
-    clf.fit(X_tr, y_tr, eval_set=[(X_te, y_te)], verbose=False)
+    # Val set for early stopping; test set for held-out evaluation
+    clf.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
 
     y_prob = clf.predict_proba(X_te)[:, 1]
     auc    = roc_auc_score(y_te, y_prob)
-    logger.info(f"XGBoost trained | ROC-AUC={auc:.4f} | features={cols}")
+    logger.info(
+        f"XGBoost trained | test ROC-AUC={auc:.4f} | "
+        f"train={len(y_tr)} val={len(y_val)} test={len(y_te)} | "
+        f"features={cols}"
+    )
     clf.save_model(str(MODEL_FILE))
     _MODEL = clf
     return clf
@@ -187,7 +208,8 @@ def _load_or_train_subject_tfidf():
     if not master.exists():
         return None
 
-    df = pd.read_csv(master, low_memory=False, engine='python', on_bad_lines='skip', encoding_errors='replace')
+    df = pd.read_csv(master, low_memory=False, engine='python',
+                     on_bad_lines='skip', encoding_errors='replace')
     if "label" not in df.columns:
         return None
     subj_col = next((c for c in ["subject","Subject"] if c in df.columns), None)
@@ -197,8 +219,13 @@ def _load_or_train_subject_tfidf():
     df = df[[subj_col,"label"]].dropna()
     X  = df[subj_col].astype(str).tolist()
     y  = df["label"].astype(int).tolist()
-    X_tr, _, y_tr, _ = train_test_split(X, y, test_size=0.1,
-                                         random_state=42, stratify=y)
+
+    # FIX-H03: 70/15/15 split to match spec
+    X_tr, X_tmp, y_tr, y_tmp = train_test_split(
+        X, y, test_size=0.30, random_state=42, stratify=y)
+    X_val, X_te, y_val, y_te = train_test_split(
+        X_tmp, y_tmp, test_size=0.50, random_state=42, stratify=y_tmp)
+
     pl = Pipeline([
         ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1,2),
                                    stop_words="english", sublinear_tf=True)),
@@ -207,6 +234,15 @@ def _load_or_train_subject_tfidf():
                                       solver="lbfgs", random_state=42)),
     ])
     pl.fit(X_tr, y_tr)
+
+    from sklearn.metrics import roc_auc_score as ras
+    y_prob = pl.predict_proba(X_te)[:, 1]
+    auc    = ras(y_te, y_prob)
+    logger.info(
+        f"Subject TF-IDF trained | test ROC-AUC={auc:.4f} | "
+        f"train={len(y_tr)} val={len(y_val)} test={len(y_te)}"
+    )
+
     with open(SUBJ_TFIDF, "wb") as f:
         pickle.dump(pl, f)
     logger.info("Subject TF-IDF trained and saved")

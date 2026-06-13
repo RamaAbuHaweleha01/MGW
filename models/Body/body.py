@@ -7,6 +7,17 @@ The caller (mail_filter.py) passes use_roberta=True/False based on a
 resource-health check, so this module honours that flag rather than
 deciding independently.  If RoBERTa is explicitly selected but still
 fails at runtime (OOM, missing weights…), it falls through to TF-IDF.
+
+FIXES applied vs previous version
+───────────────────────────────────
+FIX-B01: _finetune_roberta(): pd.read_csv() result was not assigned to df
+         (bare expression) — caused NameError on df.columns. Fixed to
+         `df = pd.read_csv(...)`.
+FIX-B02: _load_tfidf(): same missing assignment — fixed to `df = pd.read_csv(...)`.
+FIX-B03: All train/test splits updated to 70/15/15 (train/val/test) to match
+         the project specification.  For TF-IDF pipelines that have no
+         early-stopping, val is merged back into training for maximum data use,
+         and the 15% test set is held out for reporting.
 """
 from __future__ import annotations
 import os, sys, json, logging, subprocess, pickle, math
@@ -53,6 +64,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
 from sklearn.pipeline import Pipeline
 
 # ─── Subject TF-IDF (header subject → NLP) ───────────────────────────────────
@@ -111,7 +123,9 @@ def _finetune_roberta(tok, model):
         logger.warning("No master dataset — RoBERTa stays as base model")
         return
 
-    pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')
+    # FIX-B01: assign result to df
+    df = pd.read_csv(master, engine='python', on_bad_lines='skip',
+                     encoding_errors='replace')
 
     if "label" not in df.columns:
         return
@@ -127,8 +141,12 @@ def _finetune_roberta(tok, model):
 
     X = df[text_col].astype(str).tolist()
     y = df["label"].astype(int).tolist()
-    X_tr, X_te, y_tr, y_te = train_test_split(
-        X, y, test_size=0.1, random_state=42, stratify=y)
+
+    # FIX-B03: 70/15/15 split — val used for early stopping in Trainer
+    X_tr, X_tmp, y_tr, y_tmp = train_test_split(
+        X, y, test_size=0.30, random_state=42, stratify=y)
+    X_val, X_te, y_val, y_te = train_test_split(
+        X_tmp, y_tmp, test_size=0.50, random_state=42, stratify=y_tmp)
 
     class EmailDS(Dataset):
         def __init__(self, texts, labels):
@@ -143,8 +161,8 @@ def _finetune_roberta(tok, model):
                     "attention_mask": self.masks[i],
                     "labels":         self.labels[i]}
 
-    train_ds = EmailDS(X_tr, y_tr)
-    eval_ds  = EmailDS(X_te, y_te)
+    train_ds = EmailDS(X_tr,  y_tr)
+    eval_ds  = EmailDS(X_val, y_val)
 
     args = TrainingArguments(
         output_dir=str(ROBERTA_DIR),
@@ -162,7 +180,10 @@ def _finetune_roberta(tok, model):
             eval_dataset=eval_ds).train()
     model.save_pretrained(str(ROBERTA_DIR))
     tok.save_pretrained(str(ROBERTA_DIR))
-    logger.info(f"RoBERTa fine-tuned and saved → {ROBERTA_DIR}")
+    logger.info(
+        f"RoBERTa fine-tuned | train={len(y_tr)} val={len(y_val)} "
+        f"test={len(y_te)} → {ROBERTA_DIR}"
+    )
 
 
 def _roberta_score(clean_text: str) -> float:
@@ -192,7 +213,9 @@ def _load_tfidf():
     if not master.exists():
         return None
 
-    pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')
+    # FIX-B02: assign result to df
+    df = pd.read_csv(master, engine='python', on_bad_lines='skip',
+                     encoding_errors='replace')
     text_col = next((c for c in ["body","text","subject"] if c in df.columns), None)
     if not text_col or "label" not in df.columns:
         return None
@@ -200,8 +223,17 @@ def _load_tfidf():
     df = df[[text_col,"label"]].dropna()
     X  = df[text_col].astype(str).tolist()
     y  = df["label"].astype(int).tolist()
-    X_tr, _, y_tr, _ = train_test_split(X, y, test_size=0.1,
-                                         random_state=42, stratify=y)
+
+    # FIX-B03: 70/15/15 — for TF-IDF we merge train+val (no early stopping)
+    X_tr, X_tmp, y_tr, y_tmp = train_test_split(
+        X, y, test_size=0.30, random_state=42, stratify=y)
+    X_val, X_te, y_val, y_te = train_test_split(
+        X_tmp, y_tmp, test_size=0.50, random_state=42, stratify=y_tmp)
+
+    # Merge train + val for final TF-IDF fit (no early stopping needed)
+    X_fit = X_tr + X_val
+    y_fit = y_tr + y_val
+
     pl = Pipeline([
         ("tfidf", TfidfVectorizer(max_features=15000, ngram_range=(1,3),
                                    stop_words="english", sublinear_tf=True)),
@@ -209,7 +241,15 @@ def _load_tfidf():
                                       class_weight="balanced",
                                       solver="lbfgs", random_state=42)),
     ])
-    pl.fit(X_tr, y_tr)
+    pl.fit(X_fit, y_fit)
+
+    y_prob = pl.predict_proba(X_te)[:, 1]
+    auc    = roc_auc_score(y_te, y_prob)
+    logger.info(
+        f"TF-IDF body trained | test ROC-AUC={auc:.4f} | "
+        f"train+val={len(X_fit)} test={len(y_te)}"
+    )
+
     with open(TFIDF_FILE, "wb") as f:
         pickle.dump(pl, f)
     logger.info("TF-IDF body model trained and saved")
@@ -234,7 +274,8 @@ def _load_subject_tfidf():
     if not master.exists():
         return None
 
-    df = pd.read_csv(master, engine='python', on_bad_lines='skip', encoding_errors='replace')  # Fixed indentation
+    df = pd.read_csv(master, engine='python', on_bad_lines='skip',
+                     encoding_errors='replace')
     if "label" not in df.columns:
         return None
     subj_col = next((c for c in ["subject","Subject"] if c in df.columns), None)
@@ -244,8 +285,15 @@ def _load_subject_tfidf():
     df = df[[subj_col,"label"]].dropna()
     X  = df[subj_col].astype(str).tolist()
     y  = df["label"].astype(int).tolist()
-    X_tr, _, y_tr, _ = train_test_split(X, y, test_size=0.1,
-                                         random_state=42, stratify=y)
+
+    # FIX-B03: 70/15/15; merge train+val for TF-IDF
+    X_tr, X_tmp, y_tr, y_tmp = train_test_split(
+        X, y, test_size=0.30, random_state=42, stratify=y)
+    X_val, X_te, y_val, y_te = train_test_split(
+        X_tmp, y_tmp, test_size=0.50, random_state=42, stratify=y_tmp)
+    X_fit = X_tr + X_val
+    y_fit = y_tr + y_val
+
     pl = Pipeline([
         ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1,2),
                                    stop_words="english", sublinear_tf=True)),
@@ -253,7 +301,15 @@ def _load_subject_tfidf():
                                       class_weight="balanced",
                                       solver="lbfgs", random_state=42)),
     ])
-    pl.fit(X_tr, y_tr)
+    pl.fit(X_fit, y_fit)
+
+    y_prob = pl.predict_proba(X_te)[:, 1]
+    auc    = roc_auc_score(y_te, y_prob)
+    logger.info(
+        f"TF-IDF subject trained | test ROC-AUC={auc:.4f} | "
+        f"train+val={len(X_fit)} test={len(y_te)}"
+    )
+
     with open(SUBJECT_TFIDF_FILE, "wb") as f:
         pickle.dump(pl, f)
     logger.info("TF-IDF subject model trained and saved")
@@ -340,13 +396,12 @@ def analyze(clean_text: str, semantic_meta: dict,
 
     if clean_text.strip():
         if use_roberta:
-            # Attempt RoBERTa
             try:
                 nlp_prob = _roberta_score(clean_text)
                 engine   = "roberta+semantic"
             except Exception as exc:
                 logger.warning(f"RoBERTa failed ({exc}) — falling back to TF-IDF")
-                use_roberta = False   # continue into TF-IDF branch
+                use_roberta = False
 
         if not use_roberta:
             try:
