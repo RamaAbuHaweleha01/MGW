@@ -21,6 +21,16 @@ FIX-MF03: log_verdict score_color bar updated — DROP ≥ 4.5, DELIVER < 4.5; n
 FIX-MF04: sandbox_veto flag surfaced in log_verdict and action_detail string.
 FIX-MF05: asyncio.get_event_loop() in run_server() kept (create_server is top-level,
           not inside a running loop) — get_running_loop() only used inside DATA handler.
+FIX-MF06: _import_script() now registers the module in sys.modules BEFORE calling
+          exec_module(). Python 3.10 @dataclass uses sys.modules.get(cls.__module__)
+          to resolve the class namespace; without pre-registration it receives None
+          and crashes: "'NoneType' object has no attribute '__dict__'". This caused
+          every email to fail-closed DROP even after all threshold fixes.
+FIX-MF07: date_is_future comparison rewritten to use UTC on both sides with a 5-minute
+          clock-skew tolerance. The old code used datetime.now(date_obj.tzinfo) which
+          on some systems (Thunderbird sending with +0200 offset) would compare against
+          a locally-adjusted clock and incorrectly flag normal mail as future-dated,
+          adding +0.30 weight to the heuristic score unnecessarily.
 """
 from __future__ import annotations
 import sys, os, json, logging, asyncio, time, re, html, importlib.util
@@ -110,9 +120,18 @@ sandbox_logger.setLevel(logging.INFO)
 # Utilities
 # ══════════════════════════════════════════════════════════════════════════════
 def _import_script(path: str, name: str):
+    # FIX-MF06: Register module in sys.modules BEFORE exec_module so that
+    # Python 3.10 @dataclass can resolve cls.__module__ via sys.modules.get().
+    # Without this, dataclasses._process_class() receives None and crashes:
+    # "'NoneType' object has no attribute '__dict__'"
     spec = importlib.util.spec_from_file_location(name, path)
     mod  = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    sys.modules[name] = mod          # must register before exec
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        sys.modules.pop(name, None)  # clean up on failure
+        raise
     return mod
 
 
@@ -236,8 +255,16 @@ def semantic_track(msg, raw_body: str) -> dict:
     if date_str:
         try:
             from email.utils import parsedate_to_datetime
+            from datetime import timezone as _tz
             date_obj = parsedate_to_datetime(date_str)
-            date_is_future = int(date_obj > datetime.now(date_obj.tzinfo))
+            # FIX-MF07: always compare in UTC to avoid naive/aware mismatch.
+            # parsedate_to_datetime returns tz-aware; convert both sides to UTC.
+            # Allow 5-minute clock skew before flagging as future-dated.
+            import datetime as _dt
+            now_utc  = _dt.datetime.now(_tz.utc)
+            date_utc = date_obj.astimezone(_tz.utc)
+            skew_secs = (date_utc - now_utc).total_seconds()
+            date_is_future = int(skew_secs > 300)   # >5 min ahead → suspicious
         except Exception:
             pass
 
@@ -586,8 +613,8 @@ def log_verdict(
     bar_len = 40
     filled  = int((score / 10.0) * bar_len)
     bar     = "█" * filled + "░" * (bar_len - filled)
-    # T_DROP is 0.45 → 4.5/10
-    score_color = "DROP   " if score >= 4.5 else "DELIVER"
+    # T_DROP is 0.55 → 5.5/10  (FIX-MF06/DE08)
+    score_color = "DROP   " if score >= 5.5 else "DELIVER"
 
     veto_line = "  [SANDBOX VETO] Attachment risk score exceeded veto threshold\n" if veto else ""
 

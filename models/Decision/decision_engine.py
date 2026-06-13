@@ -43,6 +43,17 @@ FIX-DE06: _detect_contradiction uses attach_result["risk_probability"] directly
           off the raw attachment list.
 FIX-DE07: behavior_risk in cape_verdicts defaults to 0.0 when key absent
           (sandbox_client does not populate it — guard prevents KeyError).
+FIX-DE08: T_DROP/T_DELIVER raised from 0.45 → 0.55 — previous threshold caused
+          clean internal mail to be dropped because baseline signal noise
+          (no-DKIM + model defaults) alone pushed composite past 0.45.
+FIX-DE09: Missing model risk_probability default changed from 0.5 → 0.0 in ALL
+          six locations (_extract_signals, _evaluate_rules, _detect_contradiction,
+          sandbox veto block, final explanation block). "No model output" means
+          no evidence of risk, not suspicious-neutral. The 0.5 default was the
+          primary cause of legitimate mail being dropped when models are untrained.
+FIX-DE10: no_dkim_signature weight reduced from 0.40 → 0.15. DKIM absence is
+          a weak signal — internal Postfix/Dovecot setups typically do not sign
+          outgoing mail, causing every internal email to score this signal at 1.0.
 """
 from __future__ import annotations
 import json, logging, os
@@ -54,8 +65,8 @@ logger = logging.getLogger("decision_engine")
 # ═══════════════════════════════════════════════════════════════════════════
 # Thresholds — all in 0.0–1.0 space
 # ═══════════════════════════════════════════════════════════════════════════
-T_DROP               = 0.45   # composite ≥ this → DROP  (≡ 4.5/10)
-T_DELIVER            = 0.45   # composite < this → DELIVER
+T_DROP               = 0.55   # composite ≥ this → DROP  (≡ 5.5/10)
+T_DELIVER            = 0.55   # composite < this → DELIVER
 
 # CAPE malscore thresholds (CAPE 0-10 → ÷10 → 0-1)
 T_CAPE_HARD          = 0.70   # confirmed malware (≡ 7.0/10)  → R-D01
@@ -83,7 +94,7 @@ WEIGHTS = {
     "date_is_future":             0.80,
     "missing_message_id":         0.60,
     "missing_date":               0.50,
-    "no_dkim_signature":          0.40,
+    "no_dkim_signature":          0.15,
     "display_name_spoofing":      1.20,
 
     # ── URL signals (0-1, some ratios clamped to 1.0) ────────────────────
@@ -210,9 +221,9 @@ def _extract_signals(semantic_meta, header_result, body_result, attach_result) -
     b = body_result    or {}
     a = attach_result  or {}
 
-    # Model outputs — default to 0.5 (suspicious-neutral) when absent
-    h_risk = float(h.get("risk_probability", 0.5))
-    b_risk = float(b.get("risk_probability", 0.5))
+    # Model outputs — default to 0.0 (no evidence) when absent
+    h_risk = float(h.get("risk_probability", 0.0))
+    b_risk = float(b.get("risk_probability", 0.0))
 
     cape_malscore = 0.0
     cape_behavior = 0.0
@@ -384,8 +395,8 @@ def _evaluate_rules(signals, composite_01, semantic_meta,
     _b = body_result   or {}
     _sm = semantic_meta or {}
 
-    h_risk  = float(_h.get("risk_probability", 0.5))
-    b_risk  = float(_b.get("risk_probability", 0.5))
+    h_risk  = float(_h.get("risk_probability", 0.0))
+    b_risk  = float(_b.get("risk_probability", 0.0))
     cape_01 = float(signals.get("cape_malscore_norm", 0.0))
 
     # ── HARD DROP RULES ──────────────────────────────────────────────────────
@@ -550,8 +561,8 @@ def _detect_contradiction(header_result, body_result, attach_result) -> dict:
     _h = header_result or {}
     _b = body_result   or {}
     _a = attach_result or {}
-    h_risk  = float(_h.get("risk_probability", 0.5))
-    b_risk  = float(_b.get("risk_probability", 0.5))
+    h_risk  = float(_h.get("risk_probability", 0.0))
+    b_risk  = float(_b.get("risk_probability", 0.0))
     # attach_result top-level risk_probability is aggregated by mail_filter
     a_risk  = float(_a.get("risk_probability", 0.0))
     has_att = _a.get("has_attachments", 0)
@@ -636,8 +647,8 @@ def decide(semantic_meta, header_result, body_result, attach_result) -> Decision
         _h = header_result or {}
         _b = body_result   or {}
         _a = attach_result or {}
-        h_risk = float(_h.get("risk_probability", 0.5))
-        b_risk = float(_b.get("risk_probability", 0.5))
+        h_risk = float(_h.get("risk_probability", 0.0))
+        b_risk = float(_b.get("risk_probability", 0.0))
         a_risk = float(_a.get("risk_probability", 0.0))
         explanation = (
             f"SANDBOX VETO: attachment risk ≥ {SANDBOX_VETO_THRESHOLD}  |  "
@@ -692,8 +703,8 @@ def decide(semantic_meta, header_result, body_result, attach_result) -> Decision
     _h = header_result or {}
     _b = body_result   or {}
     _a = attach_result or {}
-    h_risk = float(_h.get("risk_probability", 0.5))
-    b_risk = float(_b.get("risk_probability", 0.5))
+    h_risk = float(_h.get("risk_probability", 0.0))
+    b_risk = float(_b.get("risk_probability", 0.0))
     a_risk = float(_a.get("risk_probability", 0.0))
 
     explanation = (
