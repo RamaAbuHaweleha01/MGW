@@ -1,0 +1,57 @@
+# Copyright (C) 2010-2015 Cuckoo Foundation.
+# This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
+# See the file 'docs/LICENSE' for copying permission.
+from lib.common.abstracts import Package
+from lib.common.common import check_file_extension
+from lib.common.constants import MSOFFICE_TRUSTED_PATH, TRUSTED_PATH_TEXT
+from lib.common.exceptions import CuckooPackageError
+
+class DOC(Package):
+    """Word analysis package."""
+    default_curdir = MSOFFICE_TRUSTED_PATH
+
+    def __init__(self, options=None, config=None):
+        if options is None:
+            options = {}
+        self.config = config
+        self.options = options
+
+    PATHS = [
+        # Microsoft Word
+        ("ProgramFiles", "Microsoft Office", "WINWORD.EXE"),
+        ("ProgramFiles", "Microsoft Office", "Office*", "WINWORD.EXE"),
+        ("ProgramFiles", "Microsoft Office*", "root", "Office*", "WINWORD.EXE"),
+        ("ProgramFiles", "Microsoft Office", "WORDVIEW.EXE"),
+        # LibreOffice Writer fallbacks
+        ("ProgramFiles", "LibreOffice", "program", "swriter.exe"),
+        ("ProgramFiles(x86)", "LibreOffice", "program", "swriter.exe"),
+        ("ProgramFiles", "LibreOffice*", "program", "swriter.exe"),
+    ]
+
+    summary = "Opens a document file with WINWORD.EXE or LibreOffice Writer."
+    description = f"""Uses 'WINWORD.EXE /q', or LibreOffice Writer as fallback.
+    {TRUSTED_PATH_TEXT}
+    The .doc filename extension will be added automatically."""
+
+    def start(self, path):
+        if not path.endswith((".doc", ".docx", ".docm", ".dotm", ".odt")):
+            path = check_file_extension(path, ".doc")
+
+        # Try Microsoft Word variants first
+        for exe in ("WINWORD.EXE", "WORDVIEW.EXE"):
+            try:
+                word = self.get_path_glob(exe)
+                return self.execute(word, f'"{path}" /q', path)
+            except CuckooPackageError:
+                continue
+
+        # Fallback to LibreOffice Writer
+        try:
+            writer = self.get_path_glob("swriter.exe")
+            return self.execute(writer, f'"{path}"', path)
+        except CuckooPackageError:
+            raise CuckooPackageError(
+                "Neither Microsoft Word nor LibreOffice Writer found. "
+                "Install LibreOffice on CAPE_WIN: "
+                "https://www.libreoffice.org/download/download-libreoffice/"
+            )

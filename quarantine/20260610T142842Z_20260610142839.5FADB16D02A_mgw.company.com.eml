@@ -1,0 +1,12 @@
+Received: by mgw.company.com (Postfix, from userid 0)
+	id 5FADB16D02A; Wed, 10 Jun 2026 14:28:39 +0000 (UTC)
+From: Anacron <root@company.com>
+To: root@company.com
+Subject: Anacron job 'cron.daily' on mgw.company.com
+Content-Type: text/plain; charset=UTF-8
+Message-Id: <20260610142839.5FADB16D02A@mgw.company.com>
+Date: Wed, 10 Jun 2026 14:28:39 +0000 (UTC)
+
+/etc/cron.daily/popularity-contest:
+/etc/cron.daily/popularity-contest: 52: .: Can't open /etc/popularity-contest.conf
+run-parts: /etc/cron.daily/popularity-contest exited with return code 127

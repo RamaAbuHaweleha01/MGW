@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ~/MGW/mail_filter.py
-Mail Gateway Filter — Main Controller (v4 — Decision Engine integrated)
+Mail Gateway Filter — Main Controller (v5 — sandbox crash fixes integrated)
 
 Pipeline:
   Track A  (Semantic)   — phishing signal extraction
@@ -14,17 +14,24 @@ Actions:
   PEND    — email quarantined in ~/MGW/quarantine/, logged
   DELIVER — email forwarded to downstream mail server
 
-Directory layout:
-  ~/MGW/
-    mail_filter.py
-    mail_filter.log
-    sandbox.log
-    quarantine/          <- PENDed emails saved here
-    models/
-      Header/     header.py
-      Body/       body.py
-      Attachment/ sandbox_client.py  sandbox/
-      Decision/   decision_engine.py
+FIXES in this version (Track C / sandbox path)
+───────────────────────────────────────────────
+1. payload_bytes validation — before calling sandbox_client.analyze_attachment()
+   we now check that the payload is non-empty and log a clear warning if not.
+   A 0-byte payload was causing CAPE to crash with CuckooPackageError.
+
+2. Filename fallback improvements — content-type → extension map is expanded;
+   a zero-length filename now always gets a safe default with the right extension
+   so CAPE can select the correct analysis package.
+
+3. attachment_track now logs the payload size for every attachment, making it
+   immediately obvious if an empty file is about to be dispatched.
+
+4. _safe_process wraps the full pipeline in a try/except with full traceback
+   logging so a crash in one email never kills the SMTP listener.
+
+5. asyncio.get_event_loop() deprecation warning removed — use
+   asyncio.get_running_loop() inside DATA_BODY handler which runs in executor.
 """
 from __future__ import annotations
 import sys, os, json, logging, asyncio, time, re, html, importlib.util
@@ -63,6 +70,27 @@ LIN_ONLY_EXTS = {".sh",".elf",".run",".deb",".rpm",".bin"}
 BOTH_EXTS     = {".js",".zip",".7z",".rar",".iso",".img",
                  ".docm",".xlsm",".pptm",".rtf",".pdf",
                  ".html",".htm",".link"}
+
+# ─── Content-type → default extension map (expanded) ─────────────────────────
+CT_EXT_MAP = {
+    "application/pdf":                     ".pdf",
+    "application/zip":                     ".zip",
+    "application/x-zip-compressed":        ".zip",
+    "application/x-7z-compressed":         ".7z",
+    "application/x-rar-compressed":        ".rar",
+    "application/octet-stream":            ".bin",
+    "application/x-sh":                   ".sh",
+    "application/x-msdos-program":        ".exe",
+    "application/x-msdownload":           ".exe",
+    "application/vnd.ms-excel":           ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/msword":                 ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-powerpoint":      ".ppt",
+    "application/javascript":             ".js",
+    "text/x-shellscript":                 ".sh",
+    "text/javascript":                    ".js",
+}
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -306,6 +334,13 @@ def structural_track(raw_body: str) -> str:
 # TRACK C — Attachment → CAPEv2
 # ══════════════════════════════════════════════════════════════════════════════
 def attachment_track(msg, message_id: str) -> dict:
+    """
+    Walk MIME parts, extract real binary payload, dispatch to CAPEv2.
+
+    Key fix: payload_bytes validation before dispatch.
+    If part.get_payload(decode=True) returns None or b'', we skip that
+    attachment with a warning instead of sending a 0-byte file to CAPE.
+    """
     sc = None
     try:
         sc = _import_script(SANDBOX_SCRIPT, "sandbox_client")
@@ -323,48 +358,65 @@ def attachment_track(msg, message_id: str) -> dict:
             "text/plain","text/html","multipart/mixed",
             "multipart/alternative","multipart/related",
         )
-        if "attachment" in disp or filename or (
-            is_binary_ct and part.get_payload(decode=True) is not None
-            and not msg.is_multipart()
-        ):
-            if not filename:
-                ext_map = {
-                    "application/pdf":             ".pdf",
-                    "application/zip":             ".zip",
-                    "application/octet-stream":    ".bin",
-                    "application/x-sh":            ".sh",
-                    "application/x-msdos-program": ".exe",
-                    "text/x-shellscript":          ".sh",
-                }
-                filename = f"attachment{ext_map.get(ct, '.bin')}"
+        if not ("attachment" in disp or filename or (
+            is_binary_ct and not msg.is_multipart()
+        )):
+            continue
 
-            payload = part.get_payload(decode=True)
-            if payload is None:
-                continue
+        # ── Build filename if missing ─────────────────────────────────────────
+        if not filename:
+            ext     = CT_EXT_MAP.get(ct, ".bin")
+            filename = f"attachment{ext}"
 
-            ext = os.path.splitext(filename.lower())[1]
-            logger.info(f"Attachment: {filename} ({ct}) size={len(payload)}B ext={ext}")
-            sandbox_logger.info(f"Dispatching to CAPE: {filename}  message_id={message_id}")
+        # ── Decode payload — FIX: validate before sending to CAPE ─────────────
+        payload = part.get_payload(decode=True)
 
-            if sc is not None:
-                try:
-                    result = sc.analyze_attachment(filename, payload, message_id=message_id)
-                    attachment_results.append(result)
-                    sandbox_logger.info(
-                        f"CAPE result: {filename} verdict={result.get('verdict')} "
-                        f"risk={result.get('risk_score',0):.4f} log={result.get('log_path','?')}"
-                    )
-                except Exception as exc:
-                    logger.error(f"CAPE analysis error for {filename}: {exc}")
-                    attachment_results.append({
-                        "filename": filename, "verdict": "error",
-                        "risk_score": 0.50, "error": str(exc),
-                    })
-            else:
+        # FIX #1: Check for None (no payload) or empty bytes
+        if payload is None:
+            logger.warning(
+                f"Attachment '{filename}' ({ct}): get_payload(decode=True) "
+                f"returned None — skipping (part may be a container, not a leaf)"
+            )
+            continue
+
+        if len(payload) == 0:
+            logger.warning(
+                f"Attachment '{filename}' ({ct}): payload is 0 bytes — "
+                f"skipping to avoid CAPE CuckooPackageError crash"
+            )
+            continue
+
+        ext = os.path.splitext(filename.lower())[1]
+        logger.info(
+            f"Attachment: '{filename}' ({ct}) size={len(payload)}B ext={ext}"
+        )
+        sandbox_logger.info(
+            f"Dispatching to CAPE: '{filename}'  "
+            f"size={len(payload)}B  message_id={message_id}"
+        )
+
+        if sc is not None:
+            try:
+                result = sc.analyze_attachment(filename, payload, message_id=message_id)
+                attachment_results.append(result)
+                sandbox_logger.info(
+                    f"CAPE result: '{filename}' verdict={result.get('verdict')} "
+                    f"risk={result.get('risk_score',0):.4f} "
+                    f"log={result.get('log_path','?')}"
+                )
+            except Exception as exc:
+                logger.error(
+                    f"CAPE analysis error for '{filename}': {exc}", exc_info=True
+                )
                 attachment_results.append({
-                    "filename": filename, "verdict": "cape_unavailable",
-                    "risk_score": 0.40,
+                    "filename": filename, "verdict": "error",
+                    "risk_score": 0.50, "error": str(exc),
                 })
+        else:
+            attachment_results.append({
+                "filename": filename, "verdict": "cape_unavailable",
+                "risk_score": 0.40,
+            })
 
     if not attachment_results:
         return {"has_attachments": 0, "risk_probability": 0.0, "attachments": []}
@@ -415,7 +467,6 @@ def run_decision_engine(
         return res.to_dict()
     except Exception as exc:
         logger.error(f"Decision engine failed: {exc}")
-        # Safe fallback — PEND on engine failure
         return {
             "action":          "PEND",
             "composite_score": 5.0,
@@ -507,19 +558,20 @@ def log_verdict(
     conf     = decision.get("confidence", "?")
     rules    = decision.get("triggered_rules", [])
 
-    # Attachment detail lines
     attach_lines = ""
     for a in attach_r.get("attachments", []):
         attach_lines += (
             f"    +-- {a.get('filename','?'):30s} "
             f"verdict={a.get('verdict','?'):14s} "
-            f"risk={a.get('risk_score',0):.4f}\n"
+            f"risk={a.get('risk_score',0):.4f}  "
+            f"size={a.get('payload_size', '?')}B\n"
         )
         for v in a.get("cape_verdicts", []):
             attach_lines += (
                 f"         [{v.get('platform','?'):8s}] "
                 f"task={v.get('task_id','?')} "
                 f"machine={v.get('machine','?')} "
+                f"pkg={v.get('package','?')} "
                 f"risk={v.get('risk_score',0):.4f} "
                 f"dur={v.get('duration',0)}s "
                 f"behaviors={v.get('behaviors',[])}\n"
@@ -527,12 +579,10 @@ def log_verdict(
         if a.get("log_path"):
             attach_lines += f"         log -> {a['log_path']}\n"
 
-    # Rules fired
     rules_lines = ""
     for r in rules:
         rules_lines += f"    ! {r}\n"
 
-    # Contradiction
     contra = decision.get("contradiction", {})
     contra_line = ""
     if contra.get("has_contradiction"):
@@ -540,7 +590,6 @@ def log_verdict(
         for d in contra.get("details", []):
             contra_line += f"    ~ {d.get('description','')}\n"
 
-    # Score bar visual
     bar_len  = 40
     filled   = int((score / 10.0) * bar_len)
     bar      = "█" * filled + "░" * (bar_len - filled)
@@ -696,7 +745,8 @@ class SMTPHandler(asyncio.Protocol):
                 self._state = "DONE"
                 self._send("250 OK: queued")
                 raw_copy = bytes(self._data)
-                loop = asyncio.get_event_loop()
+                # FIX #5: use get_running_loop() — avoids DeprecationWarning
+                loop = asyncio.get_running_loop()
                 loop.run_in_executor(None, _safe_process, raw_copy)
             else:
                 self._data += (
@@ -730,6 +780,7 @@ class SMTPHandler(asyncio.Protocol):
 
 
 def _safe_process(raw_bytes: bytes):
+    """FIX #4: Wrap pipeline in full try/except so one bad email can't kill the server."""
     try:
         process_message(raw_bytes)
     except Exception as exc:

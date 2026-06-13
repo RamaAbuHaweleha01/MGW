@@ -1,0 +1,54 @@
+{
+  "filename": "encoded_payload.txt",
+  "extension": ".txt",
+  "platforms": [
+    "windows",
+    "linux"
+  ],
+  "timestamp": "2026-06-07T12:18:13.148882+00:00",
+  "cape_verdicts": [
+    {
+      "verdict": "clean",
+      "risk_score": 0.0,
+      "malscore": 0.0,
+      "behaviors": [],
+      "behavior_risk": 0.0,
+      "machine": "CAPE_WIN",
+      "platform": "windows",
+      "duration": 57,
+      "task_id": 38,
+      "signatures": [],
+      "network": {
+        "hosts": [
+          "199.232.214.172"
+        ],
+        "domains": []
+      },
+      "dropped_files": 0,
+      "processes": []
+    },
+    {
+      "verdict": "clean",
+      "risk_score": 0.0,
+      "malscore": 0.0,
+      "behaviors": [],
+      "behavior_risk": 0.0,
+      "machine": "CAPE_WIN",
+      "platform": "linux",
+      "duration": 48,
+      "task_id": 39,
+      "signatures": [],
+      "network": {
+        "hosts": [
+          "199.232.214.172"
+        ],
+        "domains": []
+      },
+      "dropped_files": 0,
+      "processes": []
+    }
+  ],
+  "redirect_chain": [],
+  "verdict": "clean",
+  "risk_score": 0.0
+}
