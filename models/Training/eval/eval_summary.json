@@ -1,0 +1,72 @@
+{
+  "timestamp": "2026-06-14 17:14:40 UTC",
+  "dataset": "/home/rama/datasets/gw_final_dataset.csv",
+  "splits": {
+    "train": 8706,
+    "test": 2902,
+    "val": 2902
+  },
+  "metrics": {
+    "train": {
+      "auc": 0.9994,
+      "f1": 0.9851,
+      "precision": 0.9935,
+      "recall": 0.9768
+    },
+    "test": {
+      "auc": 0.9986,
+      "f1": 0.9735,
+      "precision": 0.9836,
+      "recall": 0.9636
+    },
+    "val": {
+      "auc": 0.9984,
+      "f1": 0.9754,
+      "precision": 0.9868,
+      "recall": 0.9642
+    }
+  },
+  "optimal_threshold_val": 0.366,
+  "models": {
+    "xgb_header": true,
+    "tfidf_subject": false,
+    "tfidf_body": true
+  },
+  "feature_cols_used": [
+    "has_dkim",
+    "spf_fail",
+    "dkim_fail",
+    "dmarc_fail",
+    "domain_mismatch",
+    "suspicious_tld_sender",
+    "has_numeric_in_domain",
+    "has_reply_to",
+    "has_return_path",
+    "has_from",
+    "has_to",
+    "has_cc",
+    "has_bcc",
+    "has_subject",
+    "has_date",
+    "has_message_id",
+    "received_hops",
+    "date_is_future",
+    "subject_all_caps",
+    "subject_caps_ratio",
+    "subject_money",
+    "subject_exclamation",
+    "subject_has_numbers",
+    "subject_has_special",
+    "subject_length",
+    "subject_word_count",
+    "dollar_count",
+    "total_money_symbols",
+    "has_script",
+    "has_iframe",
+    "has_form",
+    "url_count",
+    "url_has_ip",
+    "url_suspicious_tlds",
+    "url_mismatch_count"
+  ]
+}

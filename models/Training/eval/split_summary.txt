@@ -1,0 +1,18 @@
+
+══════════════════════════════════════════════════════════════════════
+  DATASET & SPLIT SUMMARY
+══════════════════════════════════════════════════════════════════════
+
+Dataset path   : /home/rama/datasets/gw_final_dataset.csv
+Total samples  : 14510
+  Phishing     : 8109 (55.9%)
+  Legitimate   : 6401 (44.1%)
+
+Split 60/20/20:
+  TRAIN        : 8706 samples  (phish=4865, legit=3841)
+  TEST         : 2902 samples  (phish=1622, legit=1280)
+  VALIDATE     : 2902 samples  (phish=1622, legit=1280)
+
+Available feature columns:
+  Header struct : 35/35  ['has_dkim', 'spf_fail', 'dkim_fail', 'dmarc_fail', 'domain_mismatch', 'suspicious_tld_sender', 'has_numeric_in_domain', 'has_reply_to', 'has_return_path', 'has_from', 'has_to', 'has_cc', 'has_bcc', 'has_subject', 'has_date', 'has_message_id', 'received_hops', 'date_is_future', 'subject_all_caps', 'subject_caps_ratio', 'subject_money', 'subject_exclamation', 'subject_has_numbers', 'subject_has_special', 'subject_length', 'subject_word_count', 'dollar_count', 'total_money_symbols', 'has_script', 'has_iframe', 'has_form', 'url_count', 'url_has_ip', 'url_suspicious_tlds', 'url_mismatch_count']
+  Text column   : 'body_text' found

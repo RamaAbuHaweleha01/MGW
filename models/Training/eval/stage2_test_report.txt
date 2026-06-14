@@ -1,0 +1,39 @@
+
+══════════════════════════════════════════════════════════════════════
+  STAGE 2 — TEST SET RESULTS (20%)
+══════════════════════════════════════════════════════════════════════
+
+Model          : Fused MGW (test)
+Samples        : 2902
+Phishing rate  : 55.9%
+──────────────────────────────────────────────────
+Precision      : 0.9836
+Recall         : 0.9636
+F1-score       : 0.9735
+ROC-AUC        : 0.9986
+Avg Precision  : 0.9989  (area under PR curve)
+──────────────────────────────────────────────────
+Confusion Matrix:
+  TN=1254  FP=26
+  FN=59  TP=1563
+──────────────────────────────────────────────────
+Classification Report:
+              precision    recall  f1-score   support
+
+       Legit     0.9551    0.9797    0.9672      1280
+    Phishing     0.9836    0.9636    0.9735      1622
+
+    accuracy                         0.9707      2902
+   macro avg     0.9694    0.9717    0.9704      2902
+weighted avg     0.9710    0.9707    0.9707      2902
+
+
+Optimal Threshold (Youden J): 0.3557
+
+── GENERALISATION ANALYSIS ──
+✅  Generalisation gap = 0.0008 — model generalises well.
+
+── ANALYSIS & FEEDBACK ──
+✅  ROC-AUC=0.9986 — Excellent discrimination on test set.
+✅  F1=0.9735 — Strong harmonic mean of precision/recall.
+✅  Precision(0.984) ≈ Recall(0.964) — Well-balanced.

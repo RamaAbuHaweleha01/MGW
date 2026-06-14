@@ -65,8 +65,8 @@ logger = logging.getLogger("decision_engine")
 # ═══════════════════════════════════════════════════════════════════════════
 # Thresholds — all in 0.0–1.0 space
 # ═══════════════════════════════════════════════════════════════════════════
-T_DROP               = 0.55   # composite ≥ this → DROP  (≡ 5.5/10)
-T_DELIVER            = 0.55   # composite < this → DELIVER
+T_DROP               = 0.3660   # composite ≥ this → DROP  (≡ 3.66/10)
+T_DELIVER            = 0.3660   # composite < this → DELIVER
 
 # CAPE malscore thresholds (CAPE 0-10 → ÷10 → 0-1)
 T_CAPE_HARD          = 0.70   # confirmed malware (≡ 7.0/10)  → R-D01

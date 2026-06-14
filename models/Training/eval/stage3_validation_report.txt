@@ -1,0 +1,56 @@
+
+══════════════════════════════════════════════════════════════════════
+  STAGE 3 — VALIDATION SET RESULTS (20%)
+══════════════════════════════════════════════════════════════════════
+
+Model          : Fused MGW (validation)
+Samples        : 2902
+Phishing rate  : 55.9%
+──────────────────────────────────────────────────
+Precision      : 0.9868
+Recall         : 0.9642
+F1-score       : 0.9754
+ROC-AUC        : 0.9984
+Avg Precision  : 0.9988  (area under PR curve)
+──────────────────────────────────────────────────
+Confusion Matrix:
+  TN=1259  FP=21
+  FN=58  TP=1564
+──────────────────────────────────────────────────
+Classification Report:
+              precision    recall  f1-score   support
+
+       Legit     0.9560    0.9836    0.9696      1280
+    Phishing     0.9868    0.9642    0.9754      1622
+
+    accuracy                         0.9728      2902
+   macro avg     0.9714    0.9739    0.9725      2902
+weighted avg     0.9732    0.9728    0.9728      2902
+
+
+Optimal Threshold (Youden J): 0.3660
+  → Use this threshold in decision_engine.py for CAPE malscore integration.
+
+── FINAL VALIDATION SUMMARY ──
+  ROC-AUC   : 0.9984
+  F1-score  : 0.9754
+  Precision : 0.9868
+  Recall    : 0.9642
+
+── GENERALISATION vs TEST ──
+✅  Generalisation gap = 0.0001 — model generalises well.
+
+── ANALYSIS & FEEDBACK ──
+✅  ROC-AUC=0.9984 — Excellent discrimination on validation set.
+✅  F1=0.9754 — Strong harmonic mean of precision/recall.
+✅  Precision(0.987) ≈ Recall(0.964) — Well-balanced.
+
+── COMPARISON TABLE ──
+  Stage             AUC       F1     Prec      Rec
+  ────────────────────────────────────────────────
+  Train (60%)    0.9994   0.9851   0.9935   0.9768
+  Test  (20%)    0.9986   0.9735   0.9836   0.9636
+  Val   (20%)    0.9984   0.9754   0.9868   0.9642
+
+── RECOMMENDED ACTIONS ──
+  ✅  Model meets production criteria. Proceed to integration with mail_filter.py pipeline and CAPEv2 sandbox scoring.

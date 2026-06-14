@@ -1,0 +1,38 @@
+
+══════════════════════════════════════════════════════════════════════
+  STAGE 1 — TRAIN SET RESULTS (60%)
+══════════════════════════════════════════════════════════════════════
+
+Model          : Fused MGW (train)
+Samples        : 8706
+Phishing rate  : 55.9%
+──────────────────────────────────────────────────
+Precision      : 0.9935
+Recall         : 0.9768
+F1-score       : 0.9851
+ROC-AUC        : 0.9994
+Avg Precision  : 0.9995  (area under PR curve)
+──────────────────────────────────────────────────
+Confusion Matrix:
+  TN=3810  FP=31
+  FN=113  TP=4752
+──────────────────────────────────────────────────
+Classification Report:
+              precision    recall  f1-score   support
+
+       Legit     0.9712    0.9919    0.9815      3841
+    Phishing     0.9935    0.9768    0.9851      4865
+
+    accuracy                         0.9835      8706
+   macro avg     0.9824    0.9844    0.9833      8706
+weighted avg     0.9837    0.9835    0.9835      8706
+
+
+Optimal Threshold (Youden J): 0.3571  (TPR=0.9947, FPR=0.0206)
+
+── ANALYSIS & FEEDBACK ──
+✅  ROC-AUC=0.9994 — Excellent discrimination on train set.
+✅  F1=0.9851 — Strong harmonic mean of precision/recall.
+✅  Precision(0.994) ≈ Recall(0.977) — Well-balanced.
+
+ℹ️  Training metrics are expected to be high; overfitting check is done on the test set (Stage 2).
