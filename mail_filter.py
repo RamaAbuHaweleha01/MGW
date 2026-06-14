@@ -609,13 +609,6 @@ def log_verdict(
         for d in contra.get("details", []):
             contra_line += f"    ~ {d.get('description','')}\n"
 
-    # FIX-MF03: Score bar — only DROP / DELIVER thresholds (no PEND)
-    bar_len = 40
-    filled  = int((score / 10.0) * bar_len)
-    bar     = "█" * filled + "░" * (bar_len - filled)
-    # T_DROP is 0.55 → 5.5/10  (FIX-MF06/DE08)
-    score_color = "DROP   " if score >= 5.5 else "DELIVER"
-
     veto_line = "  [SANDBOX VETO] Attachment risk score exceeded veto threshold\n" if veto else ""
 
     block = (
@@ -629,7 +622,7 @@ def log_verdict(
         f"  Attach  [cape-sandbox        ] risk = {a_prob:.6f}  (count={a_count})\n"
         f"{attach_lines}"
         f"  ── Decision Engine ────────────────────────────────────────────\n"
-        f"  Score   : {score:.2f}/10  [{bar}] {score_color}\n"
+        f"  Score   : {score:.2f}/10\n"
         f"  Action  : {action:7s}  Confidence: {conf}\n"
         f"{veto_line}"
         f"{rules_lines}"
