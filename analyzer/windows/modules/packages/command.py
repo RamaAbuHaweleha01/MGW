@@ -1,9 +1,6 @@
 from lib.common.abstracts import Package
-import logging
 
-log = logging.getLogger(__name__)
-
-class Batch(Package):
+class Command(Package):
     def start(self, path):
         cmd_path = "C:\\Windows\\System32\\cmd.exe"
         cmd_args = f"/c \"{path}\""

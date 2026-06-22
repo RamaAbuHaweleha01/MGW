@@ -1,19 +1,31 @@
-#!/usr/bin/env python
-# Copyright (C) 2018 phdphuc
-# This software may be modified and distributed under the terms
-# of the MIT license. See the LICENSE file for details.
-
-from os import system
-
-from lib.core.packages import Package
-
+import os
+from lib.common.abstracts import Package
 
 class Generic(Package):
-    """Generic analysis package."""
+    def start(self, path):
+        """Execute the file based on its type."""
+        ext = os.path.splitext(path)[1].lower()
+        arguments = self.options.get("arguments", "")
+        strace_log = os.path.join(self.strace_output, "strace.log") \
+            if hasattr(self, "strace_output") and self.strace_output else "/tmp/strace.log"
 
-    def prepare(self):
-        # Make sure that our target is executable
-        # /usr/bin/open will handle it
-        system(f'/bin/chmod +x "{self.target}"')
-        self.args = [self.target] + self.args
-        self.target = "sh -c"
+        def strace_wrap(target, args=""):
+            # Build as list — Popen requires list, not shell string
+            cmd = ["/usr/bin/strace", "-f", "-e", "trace=all", "-o", strace_log, target]
+            if args:
+                cmd += args.split()
+            return self.execute(" ".join(cmd))
+
+        if ext in (".elf", "") and os.access(path, os.X_OK):
+            os.chmod(path, 0o755)
+            return strace_wrap(path, arguments)
+        elif ext == ".sh":
+            return strace_wrap("/bin/bash " + path)
+        elif ext == ".py":
+            return strace_wrap("/usr/bin/python3 " + path)
+        else:
+            try:
+                os.chmod(path, 0o755)
+                return strace_wrap(path, arguments)
+            except Exception:
+                return self.execute("/usr/bin/strings " + path)

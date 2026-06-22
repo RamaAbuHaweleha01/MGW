@@ -77,6 +77,7 @@ RESULT_UPLOADABLE = (
     b"sysmon",
     b"tlsdump",
     b"tracee",
+    b"strace",
 )
 
 RESULT_DIRECTORIES = RESULT_UPLOADABLE + (b"reports", b"logs")

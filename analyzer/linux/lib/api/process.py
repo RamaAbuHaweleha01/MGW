@@ -50,7 +50,7 @@ class Process:
         return {}
 
     def execute(self, cmd):
-        self.proc = proc = subprocess.Popen(cmd, env={"XAUTHORITY": "/root/.Xauthority", "DISPLAY": ":0"})
+        self.proc = proc = subprocess.Popen(cmd, env={"XAUTHORITY": "/root/.Xauthority", "DISPLAY": ":0"}, shell=isinstance(cmd, str))
         self.pid = proc.pid
         return True
 

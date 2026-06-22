@@ -8,7 +8,7 @@ from lib.common.abstracts import Auxiliary
 from lib.common.constants import ROOT
 from lib.common.hashing import hash_file
 from lib.common.results import upload_to_host
-
+"""
 try:
     import pyinotify
 
@@ -16,7 +16,14 @@ try:
 except ImportError:
     print("Missed pyinotify dependency")
     HAVE_PYINOTIFY = False
-
+"""
+try:
+    import pyinotify
+    HAVE_PYINOTIFY = True
+except ImportError:
+    pyinotify = None
+    HAVE_PYINOTIFY = False
+    
 log = logging.getLogger(__name__)
 DELAY = 1
 BUFSIZE = 1024 * 1024
@@ -166,24 +173,29 @@ class FileCollector(Auxiliary, Thread):
         _method_name.__name__ = f"process_{method}"
         setattr(cls, _method_name.__name__, _method_name)
 
-
-class EventProcessor(pyinotify.ProcessEvent):
-    _methods = [
-        "IN_CREATE",
-        "IN_OPEN",
-        "IN_ACCESS",
-        "IN_ATTRIB",
-        "IN_CLOSE_NOWRITE",
-        "IN_CLOSE_WRITE",
-        "IN_DELETE",
-        "IN_DELETE_SELF",
-        "IN_IGNORED",
-        "IN_MODIFY",
-        "IN_MOVE_SELF",
-        "IN_MOVED_FROM",
-        "IN_MOVED_TO",
-        "IN_Q_OVERFLOW",
-        "IN_UNMOUNT",
-        "default",
-    ]
-    uploadedHashes = []
+if pyinotify:
+    class EventProcessor(pyinotify.ProcessEvent):
+        _methods = [
+            "IN_CREATE",
+            "IN_OPEN",
+            "IN_ACCESS",
+            "IN_ATTRIB",
+            "IN_CLOSE_NOWRITE",
+            "IN_CLOSE_WRITE",
+            "IN_DELETE",
+            "IN_DELETE_SELF",
+            "IN_IGNORED",
+            "IN_MODIFY",
+            "IN_MOVE_SELF",
+            "IN_MOVED_FROM",
+            "IN_MOVED_TO",
+            "IN_Q_OVERFLOW",
+            "IN_UNMOUNT",
+            "default",
+        ]
+        uploadedHashes = []
+else:
+    class EventProcessor(object):
+        pass    
+    
+    

@@ -1,0 +1,23 @@
+[virtualbox]
+machines = CAPE_Linux, CAPE_WIN
+path     = /usr/local/bin/VBoxManage
+mode     = gui
+interface = enp0s9
+
+[CAPE_Linux]
+label    = CAPE_Linux
+platform = linux
+arch     = x64
+ip       = 10.0.0.20
+snapshot = CAPE-Clean
+interface = enp0s9
+tags     = linux,x64
+
+[CAPE_WIN]
+label    = CAPE_WIN
+platform = windows
+arch     = x64
+ip       = 10.0.0.30
+snapshot = CAPE-Clean
+interface = enp0s9
+tags     = windows,x64

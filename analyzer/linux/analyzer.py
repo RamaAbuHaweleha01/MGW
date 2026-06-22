@@ -62,6 +62,12 @@ def dump_files():
         "tlsdump/tlsdump.log",
         category="tlsdump",
     )
+    # Upload strace log if it exists
+    strace_log = os.path.join(PATHS.get("logs", "/tmp"), "strace.log")
+    if not os.path.exists(strace_log):
+        strace_log = "/tmp/strace.log"
+    if os.path.exists(strace_log):
+        upload_to_host(strace_log, "strace/strace.log", category="strace")
 
 
 def monitor_new_processes(parent_pid, interval=0.25):
@@ -250,7 +256,7 @@ class Analyzer:
         if not package_class:
             raise Exception("Could not find an appropriate analysis package")
         # Package initialization
-        kwargs = {"options": self.config.options, "timeout": self.config.timeout, "strace_ouput": PATHS["logs"]}
+        kwargs = {"options": self.config.options, "timeout": self.config.timeout, "strace_output": PATHS["logs"]}
 
         # Initialize the analysis package.
         # pack = package_class(self.config.get_options())
@@ -289,8 +295,7 @@ class Analyzer:
         # Start analysis package. If for any reason, the execution of the
         # analysis package fails, we have to abort the analysis.
         try:
-            # pids = pack.start(self.target)
-            pids = pack.start()
+            pids = pack.start(self.target)
         except NotImplementedError:
             raise CuckooError(f'The package "{package_class}" doesn\'t contain a run function')
         except CuckooPackageError as e:

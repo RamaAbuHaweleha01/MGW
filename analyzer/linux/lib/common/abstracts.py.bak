@@ -11,12 +11,10 @@ class Package:
 
     PATHS = []
 
-    def __init__(self, target, options={}, timeout=120, strace_ouput=None, **kwargs):
+    def __init__(self, options={}):
         """@param options: options dict."""
-        self.target = target
         self.options = options
-        self.timeout = timeout
-        # self.pids = []
+        self.pids = []
 
     def set_pids(self, pids):
         """Update list of monitored PIDs in the package context.
@@ -34,17 +32,12 @@ class Package:
         """Check."""
         return True
 
-    def execute(self, path, arguments=""):
+    def execute(self, cmd):
         """Start an executable for analysis.
         @param path: executable path
-        @param arguments: executable arguments (optional string)
+        @param args: executable arguments
         @return: process pid
         """
-        import shlex
-        if arguments:
-            cmd = shlex.split(f"{path} {arguments}")
-        else:
-            cmd = shlex.split(path)
         p = Process()
         if not p.execute(cmd):
             raise CuckooPackageError("Unable to execute the initial process, analysis aborted")
